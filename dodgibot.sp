@@ -1,4 +1,4 @@
-﻿#pragma semicolon 1
+#pragma semicolon 1
 
 #include <sourcemod>
 #include <smlib/arrays>
@@ -194,10 +194,10 @@ public void OnPluginStart() {
 	GetConVarString(g_hCvarUnbeatableBotMode, g_strUnbeatableBotMode, sizeof(g_strUnbeatableBotMode));
 	HookConVarChange(g_hCvarUnbeatableBotMode, OnConVarChange);
 	
-	cvarShieldRadius = CreateConVar("sm_bot_shield_radius", "200.0", "Radio del escudo protector del bot", 0, true, 50.0, true, 500.0);
+	cvarShieldRadius = CreateConVar("sm_bot_shield_radius", "200.0", "Radius of the bot's protective shield", 0, true, 50.0, true, 500.0);
 	HookConVarChange(cvarShieldRadius, OnConVarChange);
 	
-	cvarShieldForce = CreateConVar("sm_bot_shield_force", "800.0", "Fuerza del empuje del escudo", 0, true, 100.0, true, 2000.0);
+	cvarShieldForce = CreateConVar("sm_bot_shield_force", "800.0", "Force of the shield push", 0, true, 100.0, true, 2000.0);
 	HookConVarChange(cvarShieldForce, OnConVarChange);
 	
 	cvarVoteMode = CreateConVar("sm_bot_vote_mode", "3", "Player vs Bot voting. 0 = No voting, 1 = Generic chat vote, 2 = Menu vote, 3 = Both (Generic chat first, then Menu vote).", 0, true, 0.0, true, 3.0);
@@ -207,7 +207,7 @@ public void OnPluginStart() {
 	HookConVarChange(cvarVotePercentage, OnConVarChange);
 	
 	g_hVictoryDeflects = CreateConVar("sm_bot_victory_deflects", "60.0", 
-		"Deflects necesarios para ganar", FCVAR_NONE, true, 14.0, true, 220.0);
+		"Deflects needed to win", FCVAR_NONE, true, 14.0, true, 220.0);
 	HookConVarChange(g_hVictoryDeflects, OnConVarChange);
 	
 	HookEvent("object_deflected", OnDeflect, EventHookMode_Post);
@@ -221,13 +221,13 @@ public void OnPluginStart() {
 	RegAdminCmd("sm_botmode", Command_BotModeToggle, ADMFLAG_ROOT, "Toggle bot mode (ex: from Unbeatable -> Beatable or vice-versa)");
 
 	RegConsoleCmd("sm_votepvb", Command_VotePvB, "Vote for the PVB");
-	RegConsoleCmd("sm_votedif", Command_VoteDifficulty, "Votar para cambiar dificultad del bot");
-	RegConsoleCmd("sm_votedeflects", Command_VoteDeflects, "Iniciar votación de deflects");
-	RegConsoleCmd("sm_votesuper", Command_VoteSuper, "Iniciar votación de super");
-	RegConsoleCmd("sm_votemovement", Command_VoteMovement, "Iniciar votación de movimiento");
+	RegConsoleCmd("sm_votedif", Command_VoteDifficulty, "Vote to change bot difficulty");
+	RegConsoleCmd("sm_votedeflects", Command_VoteDeflects, "Start deflects vote");
+	RegConsoleCmd("sm_votesuper", Command_VoteSuper, "Start super vote");
+	RegConsoleCmd("sm_votemovement", Command_VoteMovement, "Start movement vote");
 
-	g_hAimPlayer = CreateConVar("sm_bot_super", "1", "Debería el bot apuntar a jugadores en vez de cohetes? 1 = Si, 0 = No", _, true, 0.0, true, 1.0);
-	g_hAimChance = CreateConVar("sm_bot_super_chance", "0.0", "Probabilidad (0.0 a 1.0) de que el bot apunte a jugadores al reflejar", _, true, 0.0, true, 1.0);
+	g_hAimPlayer = CreateConVar("sm_bot_super", "1", "Should the bot aim at players instead of rockets? 1 = Yes, 0 = No", _, true, 0.0, true, 1.0);
+	g_hAimChance = CreateConVar("sm_bot_super_chance", "0.0", "Probability (0.0 to 1.0) that the bot aims at players when reflecting", _, true, 0.0, true, 1.0);
 
 	AutoExecConfig(true, "DodgiBot");
 
@@ -250,22 +250,22 @@ public void OnPluginStart() {
 	ShuffleSounds(g_aShuffledDeflect, g_iDeflectIndex);
 	ShuffleSounds(g_aShuffledPain, g_iPainIndex);
 
-	g_hBotMovement = CreateConVar("sm_bot_movement", "0", "Habilitar movimiento del bot (1: Activado, 0: Desactivado)", _, true, 0.0, true, 1.0);
+	g_hBotMovement = CreateConVar("sm_bot_movement", "0", "Enable bot movement (1: Enabled, 0: Disabled)", _, true, 0.0, true, 1.0);
 	g_bBotMovement = GetConVarBool(g_hBotMovement);
 	HookConVarChange(g_hBotMovement, OnConVarChange);
 
-	cvarVotePercent = CreateConVar("sm_pvb_votepercent", "0.6", "Porcentaje de votos requeridos (0.0-1.0)", 0, true, 0.0, true, 1.0);
-	cvarVoteCooldown = CreateConVar("sm_pvb_votecooldown", "60.0", "Tiempo de espera entre votaciones");
+	cvarVotePercent = CreateConVar("sm_pvb_votepercent", "0.6", "Percentage of votes required (0.0-1.0)", 0, true, 0.0, true, 1.0);
+	cvarVoteCooldown = CreateConVar("sm_pvb_votecooldown", "60.0", "Cooldown time between votes");
 
 	AddCommandListener(Command_Say, "say");
 	AddCommandListener(Command_Say, "say_team");
 
-	RegConsoleCmd("sm_botmenu", Command_BotMenu, "Menu del bot");
+	RegConsoleCmd("sm_botmenu", Command_BotMenu, "Bot Menu");
 
-	g_hBotDifficulty = CreateConVar("sm_bot_difficulty", "0", "Dificultad del Bot (0=Normal, 1=Hard)", _, true, 0.0, true, 1.0);
+	g_hBotDifficulty = CreateConVar("sm_bot_difficulty", "0", "Bot Difficulty (0=Normal, 1=Hard)", _, true, 0.0, true, 1.0);
 	SetConVarInt(g_hBotDifficulty, 0);
 
-	g_hPredictionQuality = CreateConVar("sm_bot_prediction", "0.7", "Qué tan preciso es el bot al predecir movimientos (0.0-1.0)", _, true, 0.0, true, 1.0);
+	g_hPredictionQuality = CreateConVar("sm_bot_prediction", "0.7", "How accurate the bot is at predicting movement (0.0-1.0)", _, true, 0.0, true, 1.0);
 
 	HookConVarChange(g_hPredictionQuality, OnConVarChange);
 
@@ -299,7 +299,7 @@ public void OnPluginEnd()
 	
 	for (int i = 1; i <= MaxClients; i++) {
 		if (IsClientInGame(i) && IsOurBot(i)) {
-			KickClient(i, "Plugin recargado");
+			KickClient(i, "Plugin reloaded");
 			break;
 		}
 	}
@@ -831,7 +831,7 @@ stock void DisableMode() {
 
 	for (int i = 1; i <= MaxClients; i++) {
 		if (IsClientInGame(i) && IsOurBot(i)) {
-			KickClient(i, "Bot desactivado");
+			KickClient(i, "Bot deactivated");
 			break; 
 		}
 	}
