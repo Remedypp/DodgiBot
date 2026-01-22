@@ -59,5 +59,7 @@ db_bot_vote_cooldown : The time in seconds between allowed votes
 
 ### Visuals
 db_bot_chat_tag : The prefix tag shown in chat messages
+
 db_bot_shield_radius : The radius of the bot's protective shield
+
 db_bot_shield_force : The force applied by the shield to push players away
