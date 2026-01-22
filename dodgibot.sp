@@ -1,3 +1,4 @@
+﻿
 #pragma semicolon 1
 
 #include <sourcemod>
@@ -32,11 +33,15 @@ Handle g_hBotMovement;
 Handle g_hAimPlayer;
 Handle g_hAimChance;
 
+Handle g_hMinOrbitTime;
+Handle g_hMaxOrbitTime;
+Handle g_hMaxOrbitSpeed;
+Handle g_hOrbitChance;
+
 int bot;
-int iVotes;
 int iOwner;
 bool bVoted[MAXPLAYERS + 1] = {false, ...};
-bool ScaryPlayer[MAXPLAYERS + 1];
+
 bool botActivated = false;
 bool HasBotFlicked = false;
 bool IsBotTouched = false;
@@ -50,6 +55,15 @@ float MaxReactionTime;
 float CurrentReactionTime;
 float g_fLastActiveTime;
 bool g_bBarrierActive;
+
+float MinOrbitTime;
+float MaxOrbitTime;
+float MaxOrbitSpeed;
+float OrbitChance;
+
+bool IsBotOrbiting = false;
+bool IsBotOrbitingRight = false;
+bool IsBotOrbitingLeft = false;
 
 char g_strServerChatTag[256];
 char g_strMainChatColor[256];
@@ -83,7 +97,7 @@ new Handle:g_aShuffledLaugh = INVALID_HANDLE;
 new Handle:g_aShuffledDeflect = INVALID_HANDLE;
 new Handle:g_aShuffledPain = INVALID_HANDLE;
 new Handle:cvarVoteMode;
-new Handle:cvarVotePercentage;
+
 new bool:bVictorySoundPlayed = false;
 
 new rocketDeflects = 0;
@@ -97,9 +111,19 @@ int nVoters = 0;
 int nVotesNeeded = 0;
 int g_iVoteType = 0;
  
-bool g_bVoteCooldown = false; 
 Handle cvarVotePercent;
 Handle cvarVoteCooldown;
+
+float g_fVoteCooldownEndTime = 0.0;
+float g_fPvBVoteCooldownEndTime = 0.0;
+
+int g_iPendingVoteType = 0;
+
+Handle g_hCurrentVoteMenu = null;
+
+int nPvBVotes = 0;
+int nPvBVotesNeeded = 0;
+bool bPvBVoted[MAXPLAYERS + 1] = {false, ...};
 
 Handle g_hVictoryDeflects;
 
@@ -108,6 +132,7 @@ bool g_bSuperReflectActive = false;
 int g_iSuperReflectAttempts = 0;
 int g_iSuperReflectTarget = -1;
 int g_iRocketHitCounter = 0;
+float g_fSuperReflectTimeout;
 
 new Handle:g_hBotDifficulty = INVALID_HANDLE;
 
@@ -136,6 +161,15 @@ float g_fOriginalVictoryDeflects = 0.0;
 bool g_bHardModeTimerPending = false;
 bool g_bInternalDeflectChange = false;
 
+int g_iHardModeFocusTarget = -1;
+float g_fHardModeFocusEndTime = 0.0;
+
+int g_iProgressivePhase = 1;
+bool g_bRoundEndedByKill = false;
+bool g_bNoclipEasterEgg = false;
+int g_iEasterEggTarget = -1;
+float g_fBotSpawnTime = 0.0;
+
 int g_iPlayerDodgeDirection[MAXPLAYERS+1]; 
 int g_iPlayerDodgeCount[MAXPLAYERS+1]; 
 float g_fPlayerLastDodgeTime[MAXPLAYERS+1];
@@ -150,94 +184,11 @@ public Plugin myinfo =
 	url = ""
 };
 
+
+
 public void OnPluginStart() {
-	g_botName = CreateConVar("sm_botname", "DodgiBot", "Set the bot's name.");
-	
-	g_hCvarVoteTime = CreateConVar("sm_bot_vote_time", "25.0", "Time in seconds the vote menu should last.", 0);
-	
-	g_hMinReactionTime = CreateConVar("sm_bot_reacttime_min", "100.0", "Fastest the bot can react to the rocket being airblasted, DEFAULT: 100 milliseconds.", FCVAR_PROTECTED, true, 0.00, true, 200.00);
-	MinReactionTime = GetConVarFloat(g_hMinReactionTime);
-	HookConVarChange(g_hMinReactionTime, OnConVarChange);
-	
-	g_hMaxReactionTime = CreateConVar("sm_bot_reacttime_max", "200.0", "Slowest the bot can react to the rocket being airblasted, DEFAULT: 200 milliseconds, which is average for humans.", FCVAR_PROTECTED, true, 100.00, false);
-	MaxReactionTime = GetConVarFloat(g_hMaxReactionTime);
-	HookConVarChange(g_hMaxReactionTime, OnConVarChange);
+	LoadBotConfig();
 
-	g_hFlickChances = CreateConVar("sm_bot_flick_chances", "15.0 40.0 10.0 10.0 10.0 10.0 5.0", "Percentage chances (out of 100%) that the bot will do a <None Wave USpike DSpike LSpike RSpike BackShot> flick.", FCVAR_PROTECTED);
-	GetConVarArray(g_hFlickChances, FlickChances, sizeof(FlickChances));
-	HookConVarChange(g_hFlickChances, OnConVarChange);
-	
-	g_hCQCFlickChances = CreateConVar("sm_bot_flick_chances_cqc", "5.0 10.0 25.0 25.0 10.0 10.0 15.0", "Percentage chances (out of 100%) that the bot will do a <None Wave USpike DSpike LSpike RSpike BackShot> flick during close quarters combat.", FCVAR_PROTECTED);
-	GetConVarArray(g_hCQCFlickChances, CQCFlickChances, sizeof(CQCFlickChances));
-	HookConVarChange(g_hCQCFlickChances, OnConVarChange);
-	
-	g_hBeatableBot = CreateConVar("sm_bot_beatable", "0", "Is the bot beatable or not? If 1, the bot will airblast at the normal rate and will take damage. Otherwise, 0 for a bot that never dies.", FCVAR_PROTECTED, true, 0.0, true, 1.0);
-	IsBotBeatable = GetConVarBool(g_hBeatableBot);
-	HookConVarChange(g_hBeatableBot, OnConVarChange);
-	
-	g_hCvarServerChatTag = CreateConVar("sm_bot_servertag", "{ORANGE}[DBBOT]", "Tag that appears at the start of each chat announcement.", FCVAR_PROTECTED);
-	GetConVarString(g_hCvarServerChatTag, g_strServerChatTag, sizeof(g_strServerChatTag));
-	HookConVarChange(g_hCvarServerChatTag, OnConVarChange);
-	g_hCvarMainChatColor = CreateConVar("sm_bot_maincolor", "{WHITE}", "Color assigned to the majority of the words in chat announcements.");
-	GetConVarString(g_hCvarMainChatColor, g_strMainChatColor, sizeof(g_strMainChatColor));
-	HookConVarChange(g_hCvarMainChatColor, OnConVarChange);
-	g_hCvarKeywordChatColor = CreateConVar("sm_bot_keywordcolor", "{DARKOLIVEGREEN}", "Color assigned to the most important words in chat announcements.", FCVAR_PROTECTED);
-	GetConVarString(g_hCvarKeywordChatColor, g_strKeywordChatColor, sizeof(g_strKeywordChatColor));
-	HookConVarChange(g_hCvarKeywordChatColor, OnConVarChange);
-	g_hCvarClientChatColor = CreateConVar("sm_bot_clientwordcolor", "{TURQUOISE}", "Color assigned to the client in chat announcements.", FCVAR_PROTECTED);
-	GetConVarString(g_hCvarClientChatColor, g_strClientChatColor, sizeof(g_strClientChatColor));
-	HookConVarChange(g_hCvarClientChatColor, OnConVarChange);
-	g_hCvarBeatableBotMode = CreateConVar("sm_bot_beatablebot_mode", "Beatable", "Name assigned to the beatable bot mode.", FCVAR_PROTECTED);
-	GetConVarString(g_hCvarBeatableBotMode, g_strBeatableBotMode, sizeof(g_strBeatableBotMode));
-	HookConVarChange(g_hCvarBeatableBotMode, OnConVarChange);
-	g_hCvarUnbeatableBotMode = CreateConVar("sm_bot_unbeatablebot_mode", "Unbeatable", "Name assigned to the unbeatable bot mode.", FCVAR_PROTECTED);
-	GetConVarString(g_hCvarUnbeatableBotMode, g_strUnbeatableBotMode, sizeof(g_strUnbeatableBotMode));
-	HookConVarChange(g_hCvarUnbeatableBotMode, OnConVarChange);
-	
-	cvarShieldRadius = CreateConVar("sm_bot_shield_radius", "200.0", "Radius of the bot's protective shield", 0, true, 50.0, true, 500.0);
-	HookConVarChange(cvarShieldRadius, OnConVarChange);
-	
-	cvarShieldForce = CreateConVar("sm_bot_shield_force", "800.0", "Force of the shield push", 0, true, 100.0, true, 2000.0);
-	HookConVarChange(cvarShieldForce, OnConVarChange);
-	
-	cvarVoteMode = CreateConVar("sm_bot_vote_mode", "3", "Player vs Bot voting. 0 = No voting, 1 = Generic chat vote, 2 = Menu vote, 3 = Both (Generic chat first, then Menu vote).", 0, true, 0.0, true, 3.0);
-	HookConVarChange(cvarVoteMode, OnConVarChange);
-	
-	cvarVotePercentage = CreateConVar("sm_bot_vote_percentage", "0.60", "How many players are required for the vote to pass? 0.60 = 60%.", 0, true, 0.05, true, 1.0);
-	HookConVarChange(cvarVotePercentage, OnConVarChange);
-	
-	g_hVictoryDeflects = CreateConVar("sm_bot_victory_deflects", "60.0", 
-		"Deflects needed to win", FCVAR_NONE, true, 14.0, true, 220.0);
-	HookConVarChange(g_hVictoryDeflects, OnConVarChange);
-	
-	HookEvent("object_deflected", OnDeflect, EventHookMode_Post);
-	HookEvent("player_spawn", OnPlayerSpawn, EventHookMode_Post);
-	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre);
-	HookEvent("teamplay_setup_finished", OnSetupFinished, EventHookMode_PostNoCopy);
-	HookEvent("teamplay_round_win", OnRoundEnd, EventHookMode_Post);
-
-	RegAdminCmd("sm_pvb", Command_PVB, ADMFLAG_ROOT, "Enable PVB");
-	RegAdminCmd("sm_scary", Command_ScaryPlayer, ADMFLAG_ROOT, "Make rockets scared of you!");
-	RegAdminCmd("sm_botmode", Command_BotModeToggle, ADMFLAG_ROOT, "Toggle bot mode (ex: from Unbeatable -> Beatable or vice-versa)");
-
-	RegConsoleCmd("sm_votepvb", Command_VotePvB, "Vote for the PVB");
-	RegConsoleCmd("sm_votedif", Command_VoteDifficulty, "Vote to change bot difficulty");
-	RegConsoleCmd("sm_votedeflects", Command_VoteDeflects, "Start deflects vote");
-	RegConsoleCmd("sm_votesuper", Command_VoteSuper, "Start super vote");
-	RegConsoleCmd("sm_votemovement", Command_VoteMovement, "Start movement vote");
-
-	g_hAimPlayer = CreateConVar("sm_bot_super", "1", "Should the bot aim at players instead of rockets? 1 = Yes, 0 = No", _, true, 0.0, true, 1.0);
-	g_hAimChance = CreateConVar("sm_bot_super_chance", "0.0", "Probability (0.0 to 1.0) that the bot aims at players when reflecting", _, true, 0.0, true, 1.0);
-
-	AutoExecConfig(true, "DodgiBot");
-
-	PrecacheSound("weapons/medi_shield_deploy.wav");
-	PrecacheSound("weapons/medi_shield_retract.wav");
-
-	for(int i = 0; i < sizeof(laughSounds); i++) PrecacheSound(laughSounds[i]);
-	for(int i = 0; i < sizeof(deflectSounds); i++) PrecacheSound(deflectSounds[i]);
-	for(int i = 0; i < sizeof(painSounds); i++) PrecacheSound(painSounds[i]);
-	
 	g_aShuffledLaugh = CreateArray();
 	g_aShuffledDeflect = CreateArray();
 	g_aShuffledPain = CreateArray();
@@ -249,25 +200,6 @@ public void OnPluginStart() {
 	ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
 	ShuffleSounds(g_aShuffledDeflect, g_iDeflectIndex);
 	ShuffleSounds(g_aShuffledPain, g_iPainIndex);
-
-	g_hBotMovement = CreateConVar("sm_bot_movement", "0", "Enable bot movement (1: Enabled, 0: Disabled)", _, true, 0.0, true, 1.0);
-	g_bBotMovement = GetConVarBool(g_hBotMovement);
-	HookConVarChange(g_hBotMovement, OnConVarChange);
-
-	cvarVotePercent = CreateConVar("sm_pvb_votepercent", "0.6", "Percentage of votes required (0.0-1.0)", 0, true, 0.0, true, 1.0);
-	cvarVoteCooldown = CreateConVar("sm_pvb_votecooldown", "60.0", "Cooldown time between votes");
-
-	AddCommandListener(Command_Say, "say");
-	AddCommandListener(Command_Say, "say_team");
-
-	RegConsoleCmd("sm_botmenu", Command_BotMenu, "Bot Menu");
-
-	g_hBotDifficulty = CreateConVar("sm_bot_difficulty", "0", "Bot Difficulty (0=Normal, 1=Hard)", _, true, 0.0, true, 1.0);
-	SetConVarInt(g_hBotDifficulty, 0);
-
-	g_hPredictionQuality = CreateConVar("sm_bot_prediction", "0.7", "How accurate the bot is at predicting movement (0.0-1.0)", _, true, 0.0, true, 1.0);
-
-	HookConVarChange(g_hPredictionQuality, OnConVarChange);
 
 	for (int i = 1; i <= MAXPLAYERS; i++) {
 		g_fLastPlayerPositions[i][0] = 0.0;
@@ -286,6 +218,32 @@ public void OnPluginStart() {
 
 	CreateTimer(0.1, Timer_CheckStuckRockets, _, TIMER_REPEAT);
 	CreateTimer(5.0, Timer_CheckBotExists, _, TIMER_REPEAT);
+	
+	AddCommandListener(Command_Say, "say");
+	AddCommandListener(Command_Say, "say_team");
+
+	RegConsoleCmd("sm_botmenu", Command_BotMenu, "Bot Menu");
+	RegConsoleCmd("sm_pvb", Command_VotePvB, "Vote to enable/disable PvB");
+	RegConsoleCmd("sm_votepvb", Command_VotePvB, "Vote to enable/disable PvB");
+	RegConsoleCmd("sm_votediff", Command_VoteDifficulty, "Vote difficulty");
+	RegConsoleCmd("sm_votedif", Command_VoteDifficulty, "Vote difficulty");
+	RegConsoleCmd("sm_votedeflects", Command_VoteDeflects, "Vote deflects");
+	RegConsoleCmd("sm_votesuper", Command_VoteSuper, "Vote super chance");
+	RegConsoleCmd("sm_votemovement", Command_VoteMovement, "Vote movement");
+	RegConsoleCmd("sm_votemove", Command_VoteMovement, "Vote movement");
+	
+	// Admin commands
+	RegAdminCmd("sm_bot_toggle", Command_BotModeToggle, ADMFLAG_GENERIC, "Toggle Bot Mode");
+	RegAdminCmd("sm_bot_beatable", Command_BotBeatable, ADMFLAG_GENERIC, "Toggle Bot Beatable Mode");
+
+
+	HookEvent("object_deflected", OnDeflect, EventHookMode_Post);
+	HookEvent("player_spawn", OnPlayerSpawn, EventHookMode_Post);
+	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre);
+	HookEvent("teamplay_setup_finished", OnSetupFinished, EventHookMode_PostNoCopy);
+	HookEvent("teamplay_round_win", OnRoundEnd, EventHookMode_Post);
+
+	InitMessageSystem();
 }
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
@@ -305,12 +263,164 @@ public void OnPluginEnd()
 	}
 }
 
+public OnMapEnd()
+{
+	MapChanged = true;
+}
+
+public OnMapStart()
+{
+	
+	CreateTimer(5.0, Timer_MapStart);
+	ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
+	ShuffleSounds(g_aShuffledDeflect, g_iDeflectIndex);
+	ShuffleSounds(g_aShuffledPain, g_iPainIndex);
+	PrecacheSound("mvm/mvm_tank_start.wav", true);
+	PrecacheSound("weapons/medi_shield_deploy.wav", true);
+	PrecacheSound("weapons/medi_shield_retract.wav", true);
+
+	for(int i = 0; i < sizeof(laughSounds); i++) PrecacheSound(laughSounds[i], true);
+	for(int i = 0; i < sizeof(deflectSounds); i++) PrecacheSound(deflectSounds[i], true);
+	for(int i = 0; i < sizeof(painSounds); i++) PrecacheSound(painSounds[i], true);
+
+	PrecacheModel("models/bots/scout/bot_scout.mdl", true);
+	PrecacheModel("models/bots/soldier/bot_soldier.mdl", true);
+	PrecacheModel("models/bots/pyro/bot_pyro.mdl", true);
+	PrecacheModel("models/bots/demo/bot_demo.mdl", true);
+	PrecacheModel("models/bots/heavy/bot_heavy.mdl", true);
+	PrecacheModel("models/bots/engineer/bot_engineer.mdl", true);
+	PrecacheModel("models/bots/medic/bot_medic.mdl", true);
+	PrecacheModel("models/bots/sniper/bot_sniper.mdl", true);
+	PrecacheModel("models/bots/spy/bot_spy.mdl", true);
+
+	ResetPerformanceStats();
+
+	ResetStuckRocketData();
+	
+	g_bNoclipEasterEgg = false;
+	g_iEasterEggTarget = -1;
+	g_fBotSpawnTime = 0.0;
+
+	botActivated = false;
+	bot = 0;
+	for (int i = 1; i <= MaxClients; i++) bVoted[i] = false;
+}
+
+public Action Timer_MapStart(Handle timer)
+{
+	MapChanged = false;
+	return Plugin_Continue;
+}
+
+
+
+void LoadBotConfig()
+{
+	g_botName = CreateConVar("db_bot_name", "DodgiBot", "Set the bot's name.");
+	
+	g_hCvarVoteTime = CreateConVar("db_bot_vote_time", "25.0", "Time in seconds the vote menu should last.", 0);
+	
+	g_hMinReactionTime = CreateConVar("db_bot_react_min", "100.0", "Fastest the bot can react to the rocket being airblasted, DEFAULT: 100 milliseconds.", FCVAR_PROTECTED, true, 0.00, true, 200.00);
+	MinReactionTime = GetConVarFloat(g_hMinReactionTime);
+	HookConVarChange(g_hMinReactionTime, OnConVarChange);
+	
+	g_hMaxReactionTime = CreateConVar("db_bot_react_max", "200.0", "Slowest the bot can react to the rocket being airblasted, DEFAULT: 200 milliseconds, which is average for humans.", FCVAR_PROTECTED, true, 100.00, false);
+	MaxReactionTime = GetConVarFloat(g_hMaxReactionTime);
+	HookConVarChange(g_hMaxReactionTime, OnConVarChange);
+
+	g_hMinOrbitTime = CreateConVar("db_bot_orbit_min", "0.00", "Minimum amount of time (in seconds) the bot can orbit, DEFAULT: 0 seconds.", FCVAR_PROTECTED, true, 0.00, false);
+	MinOrbitTime = GetConVarFloat(g_hMinOrbitTime);
+	HookConVarChange(g_hMinOrbitTime, OnConVarChange);
+	
+	g_hMaxOrbitTime = CreateConVar("db_bot_orbit_max", "3.00", "Maximum amount of time (in seconds) the bot can orbit, DEFAULT: 3 seconds.", FCVAR_PROTECTED, true, 0.00, false);
+	MaxOrbitTime = GetConVarFloat(g_hMaxOrbitTime);
+	HookConVarChange(g_hMaxOrbitTime, OnConVarChange);
+	
+	g_hMaxOrbitSpeed = CreateConVar("db_bot_orbit_speed", "-1.0", "Max speed bot can orbit (in MPH), DEFAULT: Infinite, or -1.0.", FCVAR_PROTECTED, true, -1.00, false);
+	MaxOrbitSpeed = GetConVarFloat(g_hMaxOrbitSpeed);
+	HookConVarChange(g_hMaxOrbitSpeed, OnConVarChange);
+	
+	g_hOrbitChance = CreateConVar("db_bot_orbit_chance", "20.0", "Percent chance that the bot will orbit before airblasting.", FCVAR_PROTECTED, true, 0.00, true, 100.0);
+	OrbitChance = GetConVarFloat(g_hOrbitChance);
+	HookConVarChange(g_hOrbitChance, OnConVarChange);
+
+	g_hFlickChances = CreateConVar("db_bot_flick_chance", "15.0 40.0 10.0 10.0 10.0 10.0 5.0", "Percentage chances (out of 100%) that the bot will do a <None Wave USpike DSpike LSpike RSpike BackShot> flick.", FCVAR_PROTECTED);
+	GetConVarArray(g_hFlickChances, FlickChances, sizeof(FlickChances));
+	HookConVarChange(g_hFlickChances, OnConVarChange);
+	
+	g_hCQCFlickChances = CreateConVar("db_bot_flick_chance_cqc", "5.0 10.0 25.0 25.0 10.0 10.0 15.0", "Percentage chances (out of 100%) that the bot will do a <None Wave USpike DSpike LSpike RSpike BackShot> flick during close quarters combat.", FCVAR_PROTECTED);
+	GetConVarArray(g_hCQCFlickChances, CQCFlickChances, sizeof(CQCFlickChances));
+	HookConVarChange(g_hCQCFlickChances, OnConVarChange);
+	
+	g_hBeatableBot = CreateConVar("db_bot_beatable", "0", "Is the bot beatable or not? If 1, the bot will airblast at the normal rate and will take damage. Otherwise, 0 for a bot that never dies.", FCVAR_PROTECTED, true, 0.0, true, 1.0);
+	IsBotBeatable = GetConVarBool(g_hBeatableBot);
+	HookConVarChange(g_hBeatableBot, OnConVarChange);
+	
+	g_hCvarServerChatTag = CreateConVar("db_bot_chat_tag", "{ORANGE}[DBBOT]", "Tag that appears at the start of each chat announcement.", FCVAR_PROTECTED);
+	GetConVarString(g_hCvarServerChatTag, g_strServerChatTag, sizeof(g_strServerChatTag));
+	HookConVarChange(g_hCvarServerChatTag, OnConVarChange);
+	g_hCvarMainChatColor = CreateConVar("db_bot_chat_color_main", "{WHITE}", "Color assigned to the majority of the words in chat announcements.");
+	GetConVarString(g_hCvarMainChatColor, g_strMainChatColor, sizeof(g_strMainChatColor));
+	HookConVarChange(g_hCvarMainChatColor, OnConVarChange);
+	g_hCvarKeywordChatColor = CreateConVar("db_bot_chat_color_key", "{DARKOLIVEGREEN}", "Color assigned to the most important words in chat announcements.", FCVAR_PROTECTED);
+	GetConVarString(g_hCvarKeywordChatColor, g_strKeywordChatColor, sizeof(g_strKeywordChatColor));
+	HookConVarChange(g_hCvarKeywordChatColor, OnConVarChange);
+	g_hCvarClientChatColor = CreateConVar("db_bot_chat_color_client", "{TURQUOISE}", "Color assigned to the client in chat announcements.", FCVAR_PROTECTED);
+	GetConVarString(g_hCvarClientChatColor, g_strClientChatColor, sizeof(g_strClientChatColor));
+	HookConVarChange(g_hCvarClientChatColor, OnConVarChange);
+	g_hCvarBeatableBotMode = CreateConVar("db_bot_mode_name_beatable", "Beatable", "Name assigned to the beatable bot mode.", FCVAR_PROTECTED);
+	GetConVarString(g_hCvarBeatableBotMode, g_strBeatableBotMode, sizeof(g_strBeatableBotMode));
+	HookConVarChange(g_hCvarBeatableBotMode, OnConVarChange);
+	g_hCvarUnbeatableBotMode = CreateConVar("db_bot_mode_name_unbeatable", "Unbeatable", "Name assigned to the unbeatable bot mode.", FCVAR_PROTECTED);
+	GetConVarString(g_hCvarUnbeatableBotMode, g_strUnbeatableBotMode, sizeof(g_strUnbeatableBotMode));
+	HookConVarChange(g_hCvarUnbeatableBotMode, OnConVarChange);
+	
+	cvarShieldRadius = CreateConVar("db_bot_shield_radius", "200.0", "Radius of the bot's protective shield", 0, true, 50.0, true, 500.0);
+	HookConVarChange(cvarShieldRadius, OnConVarChange);
+	
+	cvarShieldForce = CreateConVar("db_bot_shield_force", "800.0", "Force of the shield push", 0, true, 100.0, true, 2000.0);
+	HookConVarChange(cvarShieldForce, OnConVarChange);
+	
+	cvarVoteMode = CreateConVar("db_bot_vote_mode", "3", "Player vs Bot voting. 0 = No voting, 1 = Generic chat vote, 2 = Menu vote, 3 = Both (Generic chat first, then Menu vote).", 0, true, 0.0, true, 3.0);
+	HookConVarChange(cvarVoteMode, OnConVarChange);
+	
+	g_hVictoryDeflects = CreateConVar("db_bot_victory_deflects", "60.0", 
+		"Deflects needed to win", FCVAR_NONE, true, 14.0, true, 220.0);
+	HookConVarChange(g_hVictoryDeflects, OnConVarChange);
+
+	g_hAimPlayer = CreateConVar("db_bot_super_reflect", "1", "Should the bot aim at players instead of rockets? 1 = Yes, 0 = No", _, true, 0.0, true, 1.0);
+	g_hAimChance = CreateConVar("db_bot_super_chance", "0.0", "Probability (0.0 to 1.0) that the bot aims at players when reflecting", _, true, 0.0, true, 1.0);
+
+	g_hBotMovement = CreateConVar("db_bot_movement", "0", "Enable bot movement (1: Enabled, 0: Disabled)", _, true, 0.0, true, 1.0);
+	g_bBotMovement = GetConVarBool(g_hBotMovement);
+	HookConVarChange(g_hBotMovement, OnConVarChange);
+
+	cvarVotePercent = CreateConVar("db_bot_vote_percent", "0.6", "Percentage of votes required (0.0-1.0)", 0, true, 0.0, true, 1.0);
+	cvarVoteCooldown = CreateConVar("db_bot_vote_cooldown", "15.0", "Cooldown time between votes");
+
+	g_hBotDifficulty = CreateConVar("db_bot_difficulty", "0", "Bot Difficulty (0=Normal, 1=Hard, 2=Progressive)", _, true, 0.0, true, 2.0);
+	SetConVarInt(g_hBotDifficulty, 0);
+
+	g_hPredictionQuality = CreateConVar("db_bot_prediction", "0.7", "How accurate the bot is at predicting movement (0.0-1.0)", _, true, 0.0, true, 1.0);
+	HookConVarChange(g_hPredictionQuality, OnConVarChange);
+
+	AutoExecConfig(true, "DodgiBot");
+}
+
 public void OnConVarChange(Handle hConvar, const char[] oldValue, const char[] newValue)
 {
 	if(hConvar == g_hMinReactionTime)
 		MinReactionTime = StringToFloat(newValue);
 	if(hConvar == g_hMaxReactionTime)
 		MaxReactionTime = StringToFloat(newValue);
+	if(hConvar == g_hMinOrbitTime)
+		MinOrbitTime = StringToFloat(newValue);
+	if(hConvar == g_hMaxOrbitTime)
+		MaxOrbitTime = StringToFloat(newValue);
+	if(hConvar == g_hMaxOrbitSpeed)
+		MaxOrbitSpeed = StringToFloat(newValue);
+	if (hConvar == g_hOrbitChance)
+		OrbitChance = StringToFloat(newValue);
 	if (hConvar == g_hFlickChances)
 		GetConVarArray(g_hFlickChances, FlickChances, sizeof(FlickChances));
 	if (hConvar == g_hCQCFlickChances)
@@ -364,446 +474,7 @@ void GetConVarArray(Handle convar, float[] destarr, int size)
     }
 }
 
-public Action Command_PVB(int client, int args) {
-  if (IsValidClient(client)) {
-    if (!botActivated) {
-      CPrintToChatAll("%s %sPlayer vs Bot is now %sactivated", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-      EnableMode();
-    } else {
-      CPrintToChatAll("%s %sPlayer vs Bot is now %sdisabled", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-      DisableMode();
-    }
-  }
-  return Plugin_Handled;
-}
 
-public OnMapEnd()
-{
-	MapChanged = true;
-}
-
-public OnMapStart()
-{
-	
-	CreateTimer(5.0, Timer_MapStart);
-	ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
-	ShuffleSounds(g_aShuffledDeflect, g_iDeflectIndex);
-	ShuffleSounds(g_aShuffledPain, g_iPainIndex);
-	PrecacheSound("mvm/mvm_tank_start.wav", true);
-
-	PrecacheModel("models/bots/scout/bot_scout.mdl", true);
-	PrecacheModel("models/bots/soldier/bot_soldier.mdl", true);
-	PrecacheModel("models/bots/pyro/bot_pyro.mdl", true);
-	PrecacheModel("models/bots/demo/bot_demo.mdl", true);
-	PrecacheModel("models/bots/heavy/bot_heavy.mdl", true);
-	PrecacheModel("models/bots/engineer/bot_engineer.mdl", true);
-	PrecacheModel("models/bots/medic/bot_medic.mdl", true);
-	PrecacheModel("models/bots/sniper/bot_sniper.mdl", true);
-	PrecacheModel("models/bots/spy/bot_spy.mdl", true);
-
-	ResetPerformanceStats();
-
-	ResetStuckRocketData();
-}
-
-public Action Timer_MapStart(Handle timer)
-{
-	MapChanged = false;
-	return Plugin_Continue;
-}
-
-public Action Command_ScaryPlayer(int client, int args)
-{
-  if (IsValidClient(client))
-  {
-    if (!ScaryPlayer[client])
-    {
-      CPrintToChatAll("%s %sYou are now %sscary!", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-      ScaryPlayer[client] = true;
-    }
-    else
-    {
-      CPrintToChatAll("%s %sYou are no longer %sscary", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-      ScaryPlayer[client] = false;
-    }
-  }
-  return Plugin_Handled;
-}
-
-public Action Command_BotModeToggle(int client, int args)
-{
-	if (IsValidClient(client))
-	{
-		if (!botActivated)
-		{
-			CReplyToCommand(client, "%s %sUnable to change Bot Mode because PvB is %sdisabled.", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-		}
-		if (!IsBotBeatable)
-		{
-			CPrintToChatAll("%s %sBot Mode changed to %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strBeatableBotMode);
-		}
-		else if (IsBotBeatable)
-		{
-			CPrintToChatAll("%s %sBot Mode changed to %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strUnbeatableBotMode);
-		}
-	}
-	return Plugin_Handled;
-}
-
-public void OnClientPutInServer(int client) {
-	ScaryPlayer[client] = false;
-
-	if (!IsFakeClient(client))
-	{
-		bVoted[client] = false;
-		
-		int playerCount = GetAllClientCount();
-		if (playerCount == 1 && !botActivated) {
-			EnableMode();
-		}
-	}
-	
-}
-
-public Action OnPlayerSpawn(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
-	if (botActivated) {
-		int iClient = GetClientOfUserId(GetEventInt(hEvent, "userid"));
-		if (IsValidClient(iClient) && !IsFakeClient(iClient)) {
-			if (GetClientTeam(iClient) == 3) {
-				ChangeClientTeam(iClient, 2);
-			}
-		} else if (IsFakeClient(iClient) && IsOurBot(iClient)) {
-			
-			bot = iClient;
-			if (!IsBotBeatable)
-			{
-				SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
-			}
-			
-			ApplyRobotEffect(bot);
-		}
-	}
-	return Plugin_Continue;
-}
-
-public Action OnSetupFinished(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
-	if (botActivated) {
-		for(int i = 1; i <= MaxClients; i++) {
-			if (IsValidClient(i)) {
-				if(GetClientTeam(i) > 1) {
-					SetEntityHealth(i, 175);
-				}
-			}
-		}
-
-	}
-	return Plugin_Continue;
-}
-
-public void OnEntityCreated(int entity, const char[] classname)
-{
-	if (!StrEqual(classname, "tf_projectile_rocket", false) || !botActivated)
-		return;
-	
-	if (StrEqual(classname, "tf_projectile_rocket"))
-	{
-		rocketDeflects = 0;
-		canTrackSpeed = true;
-		g_bRocketSuperChecked[entity] = false;
-
-		g_fRocketStuckTime[entity] = 0.0;
-		g_bRocketStuckCheck[entity] = true;
-		GetEntPropVector(entity, Prop_Data, "m_vecOrigin", g_fLastRocketPos[entity]);
-	}
-	
-	SDKHook(entity, SDKHook_StartTouch, OnStartTouchBot);
-}
-
-public void OnPreThinkBot(int entity)
-{
-	if (entity == bot && IsBotTouched)
-	{
-		float fEntityOrigin[3], fBotOrigin[3], fDistance[3], fFinalAngle[3];
-		int iEntity = -1;
-		while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) != INVALID_ENT_REFERENCE && victoryType == 0) {
-			int buttons = GetClientButtons(bot);
-			int iCurrentWeapon = GetEntPropEnt(bot, Prop_Send,"m_hActiveWeapon");
-			int iTeamRocket = GetEntProp(iEntity, Prop_Send, "m_iTeamNum");
-			GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fEntityOrigin);
-			GetClientEyePosition(bot, fBotOrigin);
-			MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fDistance);
-			GetVectorAngles(fDistance, fFinalAngle);
-			FixAngle(fFinalAngle);
-		if (iTeamRocket != 3) {
-				if (!IsBotBeatable || (IsBotBeatable && (LastDeflectionTime + CurrentReactionTime) <= GetEngineTime()))
-				{
-					
-					if(g_bSuperReflectActive && IsValidClient(g_iSuperReflectTarget) && IsPlayerAlive(g_iSuperReflectTarget))
-					{
-						float fBotEyes[3], fTargetEyes[3], fDirection[3], fAngles[3];
-						GetClientEyePosition(bot, fBotEyes);
-						GetClientEyePosition(g_iSuperReflectTarget, fTargetEyes);
-						
-						MakeVectorFromPoints(fBotEyes, fTargetEyes, fDirection);
-						GetVectorAngles(fDirection, fAngles);
-						FixAngle(fAngles);
-						TeleportEntity(bot, NULL_VECTOR, fAngles, NULL_VECTOR);
-					}
-					else
-					{
-						TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
-					}
-				}
-				if (!IsBotBeatable)
-				{
-					FireRate(iCurrentWeapon);
-				}
-				SetEntProp(entity, Prop_Data, "m_nButtons", buttons);
-				IsBotTouched = false;
-			}
-		}
-	}
-	SDKUnhook(entity, SDKHook_PreThink, OnPreThinkBot);
-}
-
-public Action OnDeflect(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
-	int iEntity = GetEventInt(hEvent, "object_entindex");
-	int deflector = GetClientOfUserId(GetEventInt(hEvent, "userid"));
-	
-	if (botActivated) {
-		iOwner = deflector;
-		if (FindEntityByClassname(iEntity, "tf_projectile_rocket") && IsValidEntity(iEntity)) {
-			g_bRocketSuperChecked[iEntity] = false;
-			if (iOwner != bot && IsValidClient(iOwner) && IsPlayerAlive(iOwner)) {
-				LastDeflectionTime = GetGameTime();
-				CurrentReactionTime = GetRandomFloat(MinReactionTime/1000.0, MaxReactionTime/1000.0);
-				g_iConsecutiveDeflects++;
-			}
-			else if (iOwner == bot) {
-				g_iConsecutiveDeflects = 0;
-
-				if (IsHardModeFullyActive()) {
-					int target = TargetClient();
-					if (IsValidClient(target)) {
-						for (int i = 0; i < 7; i++) {
-							if (g_iPlayerFlickAttempts[target][i] > 0) {
-								g_iPlayerFlickSuccess[target][i]++;
-								break;
-							}
-						}
-					}
-				}
-
-				g_bSuperReflectActive = false;
-				g_iSuperReflectTarget = -1;
-			}
-		}
-	}
-	
-	return Plugin_Continue;
-}
-
-public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) {
-  if (botActivated && victim == bot) {
-
-  }
-  return Plugin_Changed;
-}
-
-bool IsHardModeFullyActive()
-{
-    return (GetConVarInt(g_hBotDifficulty) == 1 && g_bHardModeActive);
-}
-
-public Action OnPlayerDeath(Handle hEvent, char[] strEventName, bool bDontBroadcast)
-{
-    if (botActivated) {
-        int client = GetClientOfUserId(GetEventInt(hEvent, "userid"));
-        if (IsValidClient(client) && GetClientTeam(client) == 2) {
-            bool lastRedDead = true;
-            bool botAlive = IsValidClient(bot) && IsPlayerAlive(bot);
-            
-            for(int i = 1; i <= MaxClients; i++) {
-                if(IsClientInGame(i) && i != client && IsPlayerAlive(i) && GetClientTeam(i) == 2) {
-                    lastRedDead = false;
-                    break;
-                }
-            }
-            
-            if(lastRedDead && botAlive) {
-                if(g_iLaughIndex >= GetArraySize(g_aShuffledLaugh)) {
-                    ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
-                    g_iLaughIndex = 0;
-                }
-                int index = GetArrayCell(g_aShuffledLaugh, g_iLaughIndex);
-                EmitSoundToAll(laughSounds[index]);
-                g_iLaughIndex++;
-				g_iRocketHitCounter = 0;
-
-				FakeClientCommand(bot, "taunt");
-            }
-        }
-        
-        if(client == bot) {
-            if(g_iPainIndex >= GetArraySize(g_aShuffledPain)) {
-                ShuffleSounds(g_aShuffledPain, g_iPainIndex);
-                g_iPainIndex = 0;
-            }
-            int index = GetArrayCell(g_aShuffledPain, g_iPainIndex);
-            EmitSoundToAll(painSounds[index]);
-            g_iPainIndex++;
-
-			g_iRocketHitCounter = 0;
-            g_bHardModeActive = false;
-
-            if (g_bDeflectsExtended && g_fOriginalVictoryDeflects > 0.0) {
-                g_bInternalDeflectChange = true;
-                SetConVarFloat(g_hVictoryDeflects, g_fOriginalVictoryDeflects);
-                g_bInternalDeflectChange = false;
-                g_bDeflectsExtended = false;
-            }
-        }
-
-        if (IsValidClient(client) && !IsFakeClient(client)) {
-            g_iConsecutiveDeflects = 0;
-        }
-    }
-    return Plugin_Continue;
-}
-
-public Action OnRoundEnd(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
-	if (botActivated) {
-
-        g_iRocketHitCounter = 0;
-        g_bHardModeActive = false;
-
-        if (g_bDeflectsExtended && g_fOriginalVictoryDeflects > 0.0) {
-            g_bInternalDeflectChange = true;
-            SetConVarFloat(g_hVictoryDeflects, g_fOriginalVictoryDeflects);
-            g_bInternalDeflectChange = false;
-            g_bDeflectsExtended = false;
-        }
-
-	}
-	return Plugin_Continue;
-}
-
-public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2]) {
-	
-	if (botActivated) {
-		if (MapChanged) DisableMode();
-		
-		int playerCount = GetAllClientCount();
-
-		if (playerCount == 0) {
-			if (client == bot && IsValidClient(bot) && IsPlayerAlive(bot)) {
-				LookAtControlPoint();
-			}
-			return Plugin_Continue;
-		}
-		
-		int iClient = ChooseClient();
-		if (IsValidClient(iClient) && IsPlayerAlive(iClient) && IsPlayerAlive(bot) && IsValidClient(client)) 
-		{
-			if (client == iClient) {
-				ManeuverBotAgainstClient(client);
-			}
-			else if (client == bot)
-			{
-				if (IsBotBeatable && (LastDeflectionTime + CurrentReactionTime) > GetEngineTime())
-				{
-					return Plugin_Continue;
-				}
-				if (GetConVarFloat(g_hVictoryDeflects) != 0 && rocketDeflects >= GetConVarFloat(g_hVictoryDeflects) && !allowed[client])
-				{
-					victoryType = 1;
-					buttons &= ~IN_ATTACK2;
-					return Plugin_Changed;
-				}
-				if (GetConVarFloat(g_hVictoryDeflects) != 0 && rocketDeflects < GetConVarFloat(g_hVictoryDeflects) && !allowed[client])
-				{
-					victoryType = 0;
-					AutoReflect(iClient, buttons, -1);
-
-					if (g_bBotMovement) {
-						int targetButtons = GetClientButtons(iClient);
-						if (targetButtons & IN_JUMP) {
-							buttons |= IN_JUMP;
-						}
-						if (targetButtons & IN_DUCK) {
-							buttons |= IN_DUCK;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return Plugin_Continue;
-}
-
-public void ManeuverBotAgainstClient(int client) {
-	if (!g_bBotMovement) return;
-	
-	float client_position[3];
-	GetEntPropVector(client, Prop_Send, "m_vecOrigin", client_position);
-	
-	float bot_position[3];
-	GetEntPropVector(bot, Prop_Send, "m_vecOrigin", bot_position);
-	
-	float spawner_position[3];
-	int entity_id = -1;
-	while((entity_id = FindEntityByClassname(entity_id, "info_target")) != -1) {
-		char entity_name[50];
-		GetEntPropString(entity_id, Prop_Data, "m_iName", entity_name, sizeof(entity_name));
-		
-		if(strcmp(entity_name, "rocket_spawn_blue", false) == 0) {
-			break;
-		}
-	}
-	GetEntPropVector(entity_id, Prop_Send, "m_vecOrigin", spawner_position);
-	
-	float endpoint[3]; 
-	endpoint[0] = (2 * spawner_position[0]) - client_position[0];
-	endpoint[1] = (2 * spawner_position[1]) - client_position[1];
-	endpoint[2] = bot_position[2];
-	
-	float fVelocity[3];
-	MakeVectorFromPoints(bot_position, endpoint, fVelocity);
-	NormalizeVector(fVelocity, fVelocity);
-	ScaleVector(fVelocity, 500.0);
-	
-	fVelocity[2] = 0.0;
-
-	if(GetVectorDistance(endpoint, bot_position) < 20) {
-		ScaleVector(fVelocity, 0.0);
-	} else if(GetVectorDistance(endpoint, bot_position) < 30) {
-		ScaleVector(fVelocity, 0.2);
-	} else if(GetVectorDistance(endpoint, bot_position) < 50) {
-		ScaleVector(fVelocity, 0.5);
-	}
-	TeleportEntity(bot, NULL_VECTOR, NULL_VECTOR, fVelocity);
-}
-
-public void OnClientDisconnect(int client) {
-  if (IsFakeClient(client)) return;
-  if (bVoted[client]) nVotes--;
-  nVoters--;
-  nVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
-    ScaryPlayer[client] = false;
-    if (bVoted[client]) {
-        if (iVotes > 0) {
-            iVotes -= 1;
-        }
-        bVoted[client] = false;
-    }
-    
-    int playerCount = GetAllClientCount();
-    
-    if (playerCount == 0 && botActivated) {
-        DisableMode();
-    }
-}
 
 stock void EnableMode() {
 	CreateSuperbot();
@@ -817,7 +488,6 @@ stock void CreateSuperbot() {
 	char botname[255];
 	GetConVarString(g_botName, botname, sizeof(botname));
 
-	ServerCommand("sm_manaosrobot_default 1");
 	ServerCommand("mp_autoteambalance 0");
 	ServerCommand("sv_cheats 1"); 
 
@@ -841,7 +511,6 @@ stock void DisableMode() {
 			bVoted[i] = false;
 		}
 	}
-	iVotes = 0;
 	botActivated = false;
 	bot = 0; 
 	g_fLastBotCheckTime = 0.0; 
@@ -922,248 +591,10 @@ stock void FollowClient(int client, int &buttons)
     }
 }
 
-public Action AutoReflect(int client, int &buttons, int iEntity)
-{
-    if (!IsValidClient(client))
-        return Plugin_Continue;
-    
-    float fEntityOrigin[3], fBotOrigin[3], fEnemyOrigin[3], fRocketDistance[3], fFinalAngle[3], fEnemyDistCQC, fRocketDistAuto;
-
-    while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) != INVALID_ENT_REFERENCE)
-    {
-
-        int iTeamRocket = GetEntProp(iEntity,	Prop_Send, "m_iTeamNum");
-        GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fEntityOrigin);
-        GetClientEyePosition(bot, fBotOrigin);
-        MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fRocketDistance);
-        int target = TargetClient();
-        if (IsValidClient(target)) {
-            GetClientEyePosition(target, fEnemyOrigin);
-        } else {
-            return Plugin_Continue;
-        }
-        GetVectorAngles(fRocketDistance, fFinalAngle);
-        fRocketDistAuto = GetVectorDistance(fBotOrigin, fEntityOrigin, false);
-        fEnemyDistCQC = GetVectorDistance(fBotOrigin, fEnemyOrigin, false);
-        
-        float fRocketVelocity[3];
-        GetEntPropVector(iEntity, Prop_Data, "m_vecAbsVelocity", fRocketVelocity);
-
-        float AIRBLAST_RANGE = 256.0;   
-
-        float fBotForward[3], fBotAngles[3];
-        GetClientEyeAngles(bot, fBotAngles);
-        GetAngleVectors(fBotAngles, fBotForward, NULL_VECTOR, NULL_VECTOR);
-        
-        float fToRocket[3];
-        MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fToRocket);
-        NormalizeVector(fToRocket, fToRocket);
-        
-        float dotProduct = GetVectorDotProduct(fBotForward, fToRocket);
-        bool bRocketInFront = (dotProduct > 0.0); 
-
-        if (fRocketDistAuto < 400.0 && fRocketDistAuto >= AIRBLAST_RANGE && iTeamRocket != 3)
-        {
-            if(!g_bSuperReflectActive && !g_bRocketSuperChecked[iEntity] && GetConVarInt(g_hAimPlayer) == 1)
-            {
-                g_bRocketSuperChecked[iEntity] = true;
-                if (GetRandomFloat() <= GetConVarFloat(g_hAimChance))
-                {
-                    int superTarget = TargetClient();
-                    if(IsValidClient(superTarget) && IsPlayerAlive(superTarget))
-                    {
-                        g_bSuperReflectActive = true;
-                        g_iSuperReflectTarget = superTarget;
-                        g_iSuperReflectAttempts = 0; 
-                    }
-                }
-            }
-        }
-
-        if (fRocketDistAuto < AIRBLAST_RANGE && iTeamRocket != 3)
-        {
-            if (!IsBotBeatable)
-            {
-                int iCurrentWeapon2 = GetEntPropEnt(bot, Prop_Send,"m_hActiveWeapon");
-                if(IsValidEntity(iCurrentWeapon2)) FireRate(iCurrentWeapon2);
-            }
-
-            if(g_bSuperReflectActive && !bRocketInFront)
-            {
-                g_iSuperReflectAttempts++;
-                if(g_iSuperReflectAttempts >= 1)
-                {
-                    
-                    g_bSuperReflectActive = false;
-                    g_iSuperReflectTarget = -1;
-                    g_iSuperReflectAttempts = 0;
-                }
-            }
-            
-            if(g_bSuperReflectActive && IsValidClient(g_iSuperReflectTarget) && IsPlayerAlive(g_iSuperReflectTarget))
-            {
-                float fBotEyes[3], fTargetEyes[3], fDirection[3], fAngles[3];
-                GetClientEyePosition(bot, fBotEyes);
-                GetClientEyePosition(g_iSuperReflectTarget, fTargetEyes);
-                
-                MakeVectorFromPoints(fBotEyes, fTargetEyes, fDirection);
-                GetVectorAngles(fDirection, fAngles);
-                
-                FixAngle(fAngles);
-                TeleportEntity(bot, NULL_VECTOR, fAngles, NULL_VECTOR);
-            }
-            else
-            {
-                
-                FixAngle(fFinalAngle);
-                
-                float fDeviationAngle[3];
-                fDeviationAngle[0] = fFinalAngle[0] + GetRandomFloat(-3.0, 5.0);
-                fDeviationAngle[1] = fFinalAngle[1] + GetRandomFloat(-15.0, 15.0);
-                fDeviationAngle[2] = 0.0;
-                
-                if(fDeviationAngle[0] > 45.0) fDeviationAngle[0] = 45.0;
-                if(fDeviationAngle[0] < -45.0) fDeviationAngle[0] = -45.0;
-                
-                FixAngle(fDeviationAngle);
-                TeleportEntity(bot, NULL_VECTOR, fDeviationAngle, NULL_VECTOR);
-            }
-            
-            buttons |= IN_ATTACK2;
-            HasBotFlicked = false;
-        }
-        else
-        {
-            
-            if (!HasBotFlicked && fRocketDistAuto < 500000.0)
-            {
-                if (!(GetRandomFloat() <= (FlickChances[0] / 100)))
-                {
-                    if (fEnemyDistCQC < 500.0)
-                    {
-                        GetFlickAngle(bot, iEntity, fFinalAngle, true);
-                    }
-                    else
-                    {
-                        GetFlickAngle(bot, iEntity, fFinalAngle, false);
-                    }
-                }
-                FixAngle(fFinalAngle);
-                TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
-                HasBotFlicked = true;
-            }
-            else
-            {
-                FixAngle(fFinalAngle);
-                TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
-            }
-        }
-    }
-    if ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) == INVALID_ENT_REFERENCE)
-    {
-        
-        int targetPlayer = TargetClient();
-        if (IsValidClient(targetPlayer) && IsPlayerAlive(targetPlayer)) {
-            AimClient(targetPlayer);
-        }
-    }
-
-    return Plugin_Continue;
-}
-
 stock void LerpVectors(const float start[3], const float end[3], float result[3], float t) {
     result[0] = start[0] + (end[0] - start[0]) * t;
     result[1] = start[1] + (end[1] - start[1]) * t;
     result[2] = start[2] + (end[2] - start[2]) * t;
-}
-
-public Action OnStartTouchBot(int entity, int other)
-{
-    if (victoryType == 1)
-        return Plugin_Continue;
-	
-	if ((other == bot || ScaryPlayer[other]) && entity != INVALID_ENT_REFERENCE)
-	{
-		SDKHook(entity, SDKHook_Touch, OnTouchBot);
-		return Plugin_Continue;
-	}
-	else if (entity == INVALID_ENT_REFERENCE)
-	{
-		SDKUnhook(entity, SDKHook_StartTouch, OnStartTouchBot);
-	}
-	
-	return Plugin_Continue;
-}
-
-public Action OnTouchBot(int entity, int other)
-{
-    if (victoryType == 1)
-        return Plugin_Continue;
-	
-	int iCurrentWeapon = GetEntPropEnt(other, Prop_Send, "m_hActiveWeapon");
-	float m_flNextSecondaryAttack = GetEntPropFloat(iCurrentWeapon, Prop_Send, "m_flNextSecondaryAttack");
-	float fGameTime = GetGameTime();
-	if (m_flNextSecondaryAttack > fGameTime)
-	{
-        if (other == bot && IsValidEntity(entity))
-        {
-
-            char classname[64];
-            GetEntityClassname(entity, classname, sizeof(classname));
-
-            if (StrEqual(classname, "tf_projectile_rocket", false))
-            {
-                g_bRocketStuckCheck[entity] = true;
-                g_fRocketStuckTime[entity] = GetGameTime();
-                GetEntPropVector(entity, Prop_Data, "m_vecOrigin", g_fLastRocketPos[entity]);
-            }
-        }
-
-		SDKUnhook(entity, SDKHook_Touch, OnTouchBot);
-		return Plugin_Handled;
-	}
-	
-	float vec[3];
-	float botAngles[3];
-	
-	if (other == bot)
-	{
-		GetClientEyeAngles(bot, botAngles);
-		
-		float dirVector[3];
-		GetAngleVectors(botAngles, dirVector, NULL_VECTOR, NULL_VECTOR);
-		
-		ScaleVector(dirVector, 1000.0);
-		
-		vec[0] = dirVector[0] + GetRandomFloat(-100.0, 100.0);
-		vec[1] = dirVector[1] + GetRandomFloat(-100.0, 100.0);
-		vec[2] = dirVector[2] + GetRandomFloat(-50.0, 150.0);
-		
-		float speed = GetVectorLength(vec);
-		if (speed < 800.0)
-		{
-			NormalizeVector(vec, vec);
-			ScaleVector(vec, 800.0);
-		}
-	}
-	else
-	{
-		vec[0] = GetRandomFloat(-200.0, 200.0);
-		vec[1] = GetRandomFloat(-200.0, 200.0);
-		vec[2] = GetRandomFloat(100.0, 300.0);
-	}
-	
-	TeleportEntity(entity, NULL_VECTOR, NULL_VECTOR, vec);
-	IsBotTouched = true;
-	if (other == bot)
-	{
-		SDKHook(other, SDKHook_PreThink, OnPreThinkBot);
-	}
-	SDKUnhook(entity, SDKHook_Touch, OnTouchBot);
-
-    g_bRocketStuckCheck[entity] = false;
-
-	return Plugin_Handled;
 }
 
 public bool TEF_ExcludeEntity(int entity, int contentsMask, any data)
@@ -1187,12 +618,53 @@ stock int ChooseClient() {
 }
 
 stock int TargetClient() {
+	if (!IsValidClient(bot)) return -1;
+
+	if (GetConVarInt(g_hBotDifficulty) == 1) {
+		float currentTime = GetGameTime();
+		
+		bool keepFocus = false;
+		if (g_iHardModeFocusTarget != -1 && IsValidClient(g_iHardModeFocusTarget) && IsPlayerAlive(g_iHardModeFocusTarget) && GetClientTeam(g_iHardModeFocusTarget) == 2) {
+			if (currentTime < g_fHardModeFocusEndTime) {
+				float botPos[3], targetPos[3];
+				GetClientEyePosition(bot, botPos);
+				GetClientEyePosition(g_iHardModeFocusTarget, targetPos);
+				
+				TR_TraceRayFilter(botPos, targetPos, MASK_VISIBLE, RayType_EndPoint, TEF_ExcludeEntity, bot);
+				if (TR_DidHit(INVALID_HANDLE)) {
+					keepFocus = true;
+				}
+			}
+		}
+		
+		if (keepFocus) {
+			return g_iHardModeFocusTarget;
+		}
+		
+		ArrayList candidates = new ArrayList();
+		float botPos[3];
+		GetClientEyePosition(bot, botPos);
+		
+		for (int i = 1; i <= MaxClients; i++) {
+			if (IsValidClient(i) && IsPlayerAlive(i) && !IsFakeClient(i) && GetClientTeam(i) == 2) {
+				candidates.Push(i);
+			}
+		}
+		
+		if (candidates.Length > 0) {
+			g_iHardModeFocusTarget = candidates.Get(GetRandomInt(0, candidates.Length - 1));
+			g_fHardModeFocusEndTime = currentTime + 3.0;
+		} else {
+			g_iHardModeFocusTarget = -1;
+		}
+		
+		delete candidates;
+		return g_iHardModeFocusTarget;
+	}
+
 	int iPlayer = -1;
 	float fClosestDistance = -1.0;
 	float fPlayerOrigin[3], fBotLocation[3];
-	
-	if (!IsValidClient(bot))
-		return -1;
 	
 	GetClientAbsOrigin(bot, fBotLocation);
 	
@@ -1342,7 +814,7 @@ public float AngleDistance(const float angle1, const float angle2, bool YAxis)
 	return distance;
 }
 
-public GetFlickAngle(int entity, int rocket, float angles[3], bool cqc)
+public GetFlickAngle(int entity, int rocket, float angles[3], bool cqc, bool useBaseAngles)
 {
 	float flickChances[7];
 	if (cqc)
@@ -1397,7 +869,7 @@ public GetFlickAngle(int entity, int rocket, float angles[3], bool cqc)
 				int selectedFlick = ChooseFlickBasedOnChances(flickChances);
 				g_iPlayerFlickAttempts[target][selectedFlick]++;
 
-				ApplySelectedFlick(entity, rocket, angles, selectedFlick);
+				ApplySelectedFlick(entity, rocket, angles, selectedFlick, useBaseAngles);
 
 				return;
 			}
@@ -1435,7 +907,7 @@ public GetFlickAngle(int entity, int rocket, float angles[3], bool cqc)
 		g_iPlayerFlickAttempts[target][selectedFlick]++;
 	}
 
-	ApplySelectedFlick(entity, rocket, angles, selectedFlick);
+	ApplySelectedFlick(entity, rocket, angles, selectedFlick, useBaseAngles);
 }
 
 int ChooseFlickBasedOnChances(float flickChances[7])
@@ -1453,7 +925,7 @@ int ChooseFlickBasedOnChances(float flickChances[7])
 	return 0; 
 }
 
-void ApplySelectedFlick(int entity, int rocket, float angles[3], int flickType)
+void ApplySelectedFlick(int entity, int rocket, float angles[3], int flickType, bool useBaseAngles)
 {
 
 	switch (flickType) {
@@ -1463,10 +935,12 @@ void ApplySelectedFlick(int entity, int rocket, float angles[3], int flickType)
 		case 1: {
 
 			float fLocationPlayer[3], fLocationPlayerFinal[3], fEntityOrigin[3];
-		GetClientAbsOrigin(entity, fLocationPlayer);
-			GetEntPropVector(rocket, Prop_Data, "m_vecOrigin", fEntityOrigin);
-		MakeVectorFromPoints(fEntityOrigin, fLocationPlayer, fLocationPlayerFinal);
-		GetVectorAngles(fLocationPlayerFinal, angles);
+			if (!useBaseAngles) {
+				GetClientAbsOrigin(entity, fLocationPlayer);
+				GetEntPropVector(rocket, Prop_Data, "m_vecOrigin", fEntityOrigin);
+				MakeVectorFromPoints(fEntityOrigin, fLocationPlayer, fLocationPlayerFinal);
+				GetVectorAngles(fLocationPlayerFinal, angles);
+			}
 	}
 		case 2: {
 
@@ -1605,6 +1079,982 @@ stock int GetRealClientCount(bool countBots = false)
     return clients;
 }
 
+stock FindRocketNearBot(int botClient, float radius)
+{
+
+    if (!IsValidClient(botClient)) {
+        return -1;
+    }
+
+    float fBotPos[3];
+    GetClientAbsOrigin(botClient, fBotPos);
+    
+    int iEntity = -1;
+    while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_rocket")) != -1)
+    {
+        if (!IsValidEntity(iEntity)) continue;
+        
+        float fRocketPos[3];
+        GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fRocketPos);
+        if (GetVectorDistance(fBotPos, fRocketPos) <= radius)
+            return iEntity;
+    }
+    return -1;
+}
+
+stock FindBot()
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientBot(i) && IsPlayerAlive(i))
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+stock bool IsClientBot(int client)
+{
+    return client > 0 && client <= MaxClients && IsClientInGame(client) && IsFakeClient(client) && !IsClientReplay(client) && !IsClientSourceTV(client);
+}
+
+void ShuffleSounds(Handle array, int &index)
+{
+    int size = GetArraySize(array);
+    for(int i = size - 1; i > 0; i--)
+    {
+        int j = GetRandomInt(0, i);
+        SwapArrayItems(array, i, j);
+    }
+    index = 0;
+}
+
+stock void String_ToLower(char[] str)
+{
+    int len = strlen(str);
+    for (int i = 0; i < len; i++)
+    {
+        str[i] = CharToLower(str[i]);
+    }
+}
+
+void ResetPlayerFlickStats()
+{
+    for (int client = 1; client <= MAXPLAYERS; client++) {
+        for (int i = 0; i < 7; i++) {
+            g_iPlayerFlickSuccess[client][i] = 0;
+            g_iPlayerFlickAttempts[client][i] = 0;
+        }
+    }
+}
+
+void ResetPerformanceStats()
+{
+    g_iConsecutiveDeflects = 0;
+
+    g_bHardModeActive = false;
+    g_bDeflectsExtended = false;
+    g_iRocketHitCounter = 0;
+
+    if (g_fOriginalVictoryDeflects > 0.0) {
+        g_bInternalDeflectChange = true;
+        SetConVarFloat(g_hVictoryDeflects, g_fOriginalVictoryDeflects);
+        g_bInternalDeflectChange = false;
+        g_fOriginalVictoryDeflects = 0.0;
+    }
+
+    ResetPlayerFlickStats();
+}
+
+void ResetStuckRocketData()
+{
+    for (int i = 0; i < 2048; i++)
+    {
+        g_fRocketStuckTime[i] = 0.0;
+        g_bRocketStuckCheck[i] = false;
+        g_fLastRocketPos[i][0] = 0.0;
+        g_fLastRocketPos[i][1] = 0.0;
+        g_fLastRocketPos[i][2] = 0.0;
+    }
+}
+
+public Action Timer_CheckBotExists(Handle timer) {
+    if (botActivated) {
+        bool ourBotExists = false;
+
+        for (int i = 1; i <= MaxClients; i++) {
+            if (IsClientInGame(i) && IsOurBot(i)) {
+                ourBotExists = true;
+                bot = i; 
+                break;
+            }
+        }
+
+        if (!ourBotExists) {
+            float currentTime = GetGameTime();
+
+            if (currentTime - g_fLastBotCheckTime > g_fBotRespawnDelay) {
+                RecreateBot();
+                g_fLastBotCheckTime = currentTime;
+            }
+        }
+    } else {
+        for (int i = 1; i <= MaxClients; i++) {
+            if (IsClientInGame(i) && IsOurBot(i)) {
+                KickClient(i, "Bot deactivated");
+                bot = 0;
+            }
+        }
+    }
+
+    return Plugin_Continue;
+}
+
+void RecreateBot() {
+    char botname[255];
+    GetConVarString(g_botName, botname, sizeof(botname));
+
+    ServerCommand("tf_bot_kick all");
+    ServerCommand("kick \"%s\"", botname);
+
+    ServerCommand("mp_autoteambalance 0");
+    ServerCommand("sv_cheats 1"); 
+
+    ServerCommand("bot -team blue -class pyro -name \"%s\"", botname);
+
+    CPrintToChatAll("%s %sBot has been %sauto-restarted", 
+        g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor);
+
+    CreateTimer(0.5, Timer_ConfigurePuppetBot);
+    CreateTimer(1.0, Timer_UpdateBotReference);
+}
+
+public Action Timer_UpdateBotReference(Handle timer) {
+    int botIndex = FindBot();
+    if (botIndex != -1) {
+        bot = botIndex;
+
+        if (!IsBotBeatable) {
+            SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
+        }
+    }
+
+    return Plugin_Stop;
+}
+
+public Action Timer_SecondSound(Handle timer) {
+    EmitSoundToAll("mvm/mvm_tank_start.wav");
+    return Plugin_Stop;
+}
+
+public Action Timer_ApplySuperVelocity(Handle timer, int rocket) {
+    if(!IsValidEntity(rocket)) return Plugin_Stop;
+
+    char classname[64];
+    GetEntityClassname(rocket, classname, sizeof(classname));
+    if(!StrEqual(classname, "tf_projectile_rocket", false)) return Plugin_Stop;
+
+    int superTarget = TargetClient();
+    if(!IsValidClient(superTarget) || !IsPlayerAlive(superTarget)) return Plugin_Stop;
+
+    float rocketPos[3], targetEyes[3], direction[3];
+    GetEntPropVector(rocket, Prop_Data, "m_vecOrigin", rocketPos);
+    GetClientEyePosition(superTarget, targetEyes);
+    
+    MakeVectorFromPoints(rocketPos, targetEyes, direction);
+    NormalizeVector(direction, direction);
+
+    float currentVel[3];
+    GetEntPropVector(rocket, Prop_Data, "m_vecAbsVelocity", currentVel);
+    float speed = GetVectorLength(currentVel);
+    
+    if(speed < 1100.0) speed = 1100.0;
+    
+    ScaleVector(direction, speed);
+    TeleportEntity(rocket, NULL_VECTOR, NULL_VECTOR, direction);
+    
+    return Plugin_Stop;
+}
+
+public Action Timer_ConfigurePuppetBot(Handle timer) {
+    int botIndex = FindBot();
+    if (botIndex != -1) {
+        bot = botIndex;
+        
+        if (!IsBotBeatable) {
+            SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
+        }
+        
+        ApplyRobotEffect(bot);
+        
+        ChangeTeams();
+        
+        if (botActivated) {
+            BotSayStart();
+        }
+    }
+    return Plugin_Stop;
+}
+
+bool IsHardModeFullyActive() {
+    return (GetConVarInt(g_hBotDifficulty) == 1 && g_bHardModeActive);
+}
+
+stock int GetRandomPlayer(int team) {
+    ArrayList candidates = new ArrayList();
+    for (int i = 1; i <= MaxClients; i++) {
+        if (IsValidClient(i) && IsPlayerAlive(i) && !IsFakeClient(i) && GetClientTeam(i) == team) {
+            candidates.Push(i);
+        }
+    }
+    
+    int target = -1;
+    if (candidates.Length > 0) {
+        target = candidates.Get(GetRandomInt(0, candidates.Length - 1));
+    }
+    
+    delete candidates;
+    return target;
+}
+
+
+
+public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2]) {
+	
+	if (botActivated) {
+		if (MapChanged) DisableMode();
+		
+		int playerCount = GetAllClientCount();
+
+		if (playerCount == 0) {
+			if (client == bot && IsValidClient(bot) && IsPlayerAlive(bot)) {
+				if (GetEntityMoveType(bot) == MOVETYPE_NOCLIP) {
+					SetEntityMoveType(bot, MOVETYPE_WALK);
+					g_bNoclipEasterEgg = false;
+					g_iEasterEggTarget = -1;
+				}
+				LookAtControlPoint();
+			}
+			return Plugin_Continue;
+		}
+		
+		int iClient = ChooseClient();
+		if (IsValidClient(iClient) && IsPlayerAlive(iClient) && IsPlayerAlive(bot) && IsValidClient(client)) 
+		{
+			if (client == iClient) {
+				if (GetEntityMoveType(bot) == MOVETYPE_NOCLIP && g_bBotMovement) {
+					g_bNoclipEasterEgg = true;
+					
+					if (!IsValidClient(g_iEasterEggTarget) || !IsPlayerAlive(g_iEasterEggTarget)) {
+						g_iEasterEggTarget = GetRandomPlayer(2);
+						if (g_iEasterEggTarget != -1) {
+							CPrintToChatAll("%s %sEaster Egg Target: %N", g_strServerChatTag, g_strMainChatColor, g_iEasterEggTarget);
+						}
+					}
+
+					if (IsValidClient(g_iEasterEggTarget) && IsPlayerAlive(g_iEasterEggTarget)) {
+						float targetPos[3], botPos[3], vecVelocity[3];
+						GetClientAbsOrigin(g_iEasterEggTarget, targetPos);
+						GetClientAbsOrigin(bot, botPos);
+						
+						targetPos[2] += 150.0;
+
+						float time = GetGameTime();
+						float radius = 200.0;
+						float x = Cosine(time * 3.0) * radius;
+						float y = Sine(time * 3.0) * radius;
+
+						float dest[3];
+						dest[0] = targetPos[0] + x;
+						dest[1] = targetPos[1] + y;
+						dest[2] = targetPos[2];
+
+						MakeVectorFromPoints(botPos, dest, vecVelocity);
+						ScaleVector(vecVelocity, 10.0);
+						
+						TeleportEntity(bot, NULL_VECTOR, NULL_VECTOR, vecVelocity);
+						
+						float angleToTarget[3], vecLook[3];
+						float targetEyes[3];
+						GetClientEyePosition(g_iEasterEggTarget, targetEyes);
+						GetClientEyePosition(bot, botPos);
+						
+						MakeVectorFromPoints(botPos, targetEyes, vecLook);
+						GetVectorAngles(vecLook, angleToTarget);
+						TeleportEntity(bot, NULL_VECTOR, angleToTarget, NULL_VECTOR);
+					}
+				} else {
+					if (g_bNoclipEasterEgg && (GetGameTime() - g_fBotSpawnTime < 1.0)) {
+						SetEntityMoveType(bot, MOVETYPE_NOCLIP);
+					} else {
+						g_bNoclipEasterEgg = false;
+						ManeuverBotAgainstClient(client);
+					}
+				}
+			}
+			else if (client == bot)
+			{
+				if (IsBotBeatable && (LastDeflectionTime + CurrentReactionTime) > GetEngineTime())
+				{
+					return Plugin_Continue;
+				}
+				OrbitRocket();
+				float victoryLimit = GetConVarFloat(g_hVictoryDeflects);
+				if (GetConVarInt(g_hBotDifficulty) == 2) victoryLimit = 60.0;
+
+				if (victoryLimit != 0 && rocketDeflects >= victoryLimit && !allowed[client])
+				{
+					victoryType = 1;
+					buttons &= ~IN_ATTACK2;
+					return Plugin_Changed;
+				}
+				if (victoryLimit != 0 && rocketDeflects < victoryLimit && !allowed[client])
+				{
+					victoryType = 0;
+					AutoReflect(iClient, buttons, -1);
+
+					bool allowMovement = g_bBotMovement;
+					if (GetConVarInt(g_hBotDifficulty) == 2) {
+						if (g_iProgressivePhase == 1) allowMovement = false;
+						else allowMovement = true;
+					}
+
+					if (allowMovement) {
+						int targetButtons = GetClientButtons(iClient);
+						if (targetButtons & IN_JUMP) {
+							buttons |= IN_JUMP;
+						}
+
+					}
+				}
+			}
+		}
+	}
+
+	return Plugin_Continue;
+}
+
+public Action AutoReflect(int client, int &buttons, int iEntity)
+{
+    if (!IsValidClient(client))
+        return Plugin_Continue;
+    
+    float fEntityOrigin[3], fBotOrigin[3], fEnemyOrigin[3], fRocketDistance[3], fFinalAngle[3], fEnemyDistCQC, fRocketDistAuto;
+
+    while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) != INVALID_ENT_REFERENCE)
+    {
+
+        int iTeamRocket = GetEntProp(iEntity,	Prop_Send, "m_iTeamNum");
+        GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fEntityOrigin);
+        GetClientEyePosition(bot, fBotOrigin);
+        MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fRocketDistance);
+        int target = TargetClient();
+        if (IsValidClient(target)) {
+            GetClientEyePosition(target, fEnemyOrigin);
+        } else {
+            fEnemyOrigin = fEntityOrigin;
+        }
+        GetVectorAngles(fRocketDistance, fFinalAngle);
+        fRocketDistAuto = GetVectorDistance(fBotOrigin, fEntityOrigin, false);
+        fEnemyDistCQC = GetVectorDistance(fBotOrigin, fEnemyOrigin, false);
+        
+        float fRocketVelocity[3];
+        GetEntPropVector(iEntity, Prop_Data, "m_vecAbsVelocity", fRocketVelocity);
+
+        float AIRBLAST_RANGE = 256.0;   
+
+        float fBotForward[3], fBotAngles[3];
+        GetClientEyeAngles(bot, fBotAngles);
+        GetAngleVectors(fBotAngles, fBotForward, NULL_VECTOR, NULL_VECTOR);
+        
+        float fToRocket[3];
+        MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fToRocket);
+        NormalizeVector(fToRocket, fToRocket);
+        
+        float dotProduct = GetVectorDotProduct(fBotForward, fToRocket);
+        bool bRocketInFront = (dotProduct > 0.0); 
+
+        if (!IsBotOrbiting && fRocketDistAuto < 400.0 && fRocketDistAuto >= AIRBLAST_RANGE && iTeamRocket != 3)
+        {
+            if(!g_bSuperReflectActive && !g_bRocketSuperChecked[iEntity] && GetConVarInt(g_hAimPlayer) == 1)
+            {
+                float chance = GetConVarFloat(g_hAimChance);
+                if (GetConVarInt(g_hBotDifficulty) == 2) {
+                    if (g_iProgressivePhase == 1) chance = 0.0;
+                    else if (g_iProgressivePhase == 2) chance = 0.05;
+                    else if (g_iProgressivePhase == 3) chance = 0.30;
+                }
+                
+                if (chance < 0.1) chance = 0.0;
+
+                g_bRocketSuperChecked[iEntity] = true;
+                if (GetRandomFloat() <= chance)
+                {
+                    int superTarget = TargetClient();
+                    if(IsValidClient(superTarget) && IsPlayerAlive(superTarget))
+                    {
+                        g_bSuperReflectActive = true;
+                        g_iSuperReflectTarget = superTarget;
+                        g_iSuperReflectAttempts = 0; 
+                        
+                        g_fSuperReflectTimeout = GetGameTime() + 15.0;
+                    }
+                }
+            }
+        }
+
+        if (g_bSuperReflectActive && GetGameTime() > g_fSuperReflectTimeout) {
+            g_bSuperReflectActive = false;
+            g_iSuperReflectTarget = -1;
+        }
+
+        bool canAirblast = true;
+        if (g_bSuperReflectActive) {
+             if (dotProduct < 0.9) { 
+                 canAirblast = false; 
+             }
+        }
+
+        if (canAirblast && (!IsBotOrbiting || g_bSuperReflectActive) && fRocketDistAuto < AIRBLAST_RANGE && iTeamRocket != 3)
+        {
+            if (!IsBotBeatable)
+            {
+                int iCurrentWeapon2 = GetEntPropEnt(bot, Prop_Send,"m_hActiveWeapon");
+                if(IsValidEntity(iCurrentWeapon2)) 
+                {
+                    SetEntPropFloat(iCurrentWeapon2, Prop_Send, "m_flNextSecondaryAttack", GetGameTime());
+                }
+            }
+
+            if(g_bSuperReflectActive && !bRocketInFront)
+            {
+                g_iSuperReflectAttempts++;
+                if(g_iSuperReflectAttempts >= 1)
+                {
+                    
+                    g_bSuperReflectActive = false;
+                    g_iSuperReflectTarget = -1;
+                    g_iSuperReflectAttempts = 0;
+                }
+            }
+            
+            if(g_bSuperReflectActive && IsValidClient(g_iSuperReflectTarget) && IsPlayerAlive(g_iSuperReflectTarget))
+            {
+                float fBotEyes[3], fTargetEyes[3], fDirection[3], fAngles[3];
+                GetClientEyePosition(bot, fBotEyes);
+                GetClientEyePosition(g_iSuperReflectTarget, fTargetEyes);
+                
+                MakeVectorFromPoints(fBotEyes, fTargetEyes, fDirection);
+                GetVectorAngles(fDirection, fAngles);
+                
+                FixAngle(fAngles);
+                TeleportEntity(bot, NULL_VECTOR, fAngles, NULL_VECTOR);
+            }
+            else
+            {
+                
+                FixAngle(fFinalAngle);
+                
+                float fDeviationAngle[3];
+                fDeviationAngle[0] = fFinalAngle[0] + GetRandomFloat(-3.0, 5.0);
+                fDeviationAngle[1] = fFinalAngle[1] + GetRandomFloat(-15.0, 15.0);
+                fDeviationAngle[2] = 0.0;
+                
+                if(fDeviationAngle[0] > 45.0) fDeviationAngle[0] = 45.0;
+                if(fDeviationAngle[0] < -45.0) fDeviationAngle[0] = -45.0;
+                
+                if (!HasBotFlicked)
+                {
+                    bool allowFlicks = true;
+                    if (GetConVarInt(g_hBotDifficulty) == 2 && g_iProgressivePhase == 1) allowFlicks = false;
+
+                    if (allowFlicks && !(GetRandomFloat() <= (FlickChances[0] / 100)))
+                    {
+                        if (fEnemyDistCQC < 500.0)
+                        {
+                            GetFlickAngle(bot, iEntity, fDeviationAngle, true, true);
+                        }
+                        else
+                        {
+                            GetFlickAngle(bot, iEntity, fDeviationAngle, false, true);
+                        }
+                    }
+                    HasBotFlicked = true;
+                }
+
+                FixAngle(fDeviationAngle);
+                TeleportEntity(bot, NULL_VECTOR, fDeviationAngle, NULL_VECTOR);
+            }
+            
+            buttons |= IN_ATTACK2;
+            HasBotFlicked = false;
+        }
+        else
+        {
+            if (IsBotOrbiting)
+            {
+                float fEnemyVec[3];
+                MakeVectorFromPoints(fBotOrigin, fEnemyOrigin, fEnemyVec);
+                GetVectorAngles(fEnemyVec, fFinalAngle);
+                FixAngle(fFinalAngle);
+                TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
+            }
+            else if (!HasBotFlicked && fRocketDistAuto < 500000.0)
+            {
+                bool allowFlicks = true;
+                if (GetConVarInt(g_hBotDifficulty) == 2 && g_iProgressivePhase == 1) allowFlicks = false;
+
+                if (allowFlicks && !(GetRandomFloat() <= (FlickChances[0] / 100)))
+                {
+                    if (fEnemyDistCQC < 500.0)
+                    {
+                        GetFlickAngle(bot, iEntity, fFinalAngle, true, false);
+                    }
+                    else
+                    {
+                        GetFlickAngle(bot, iEntity, fFinalAngle, false, false);
+                    }
+                }
+                FixAngle(fFinalAngle);
+                TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
+                HasBotFlicked = true;
+            }
+            else
+            {
+                FixAngle(fFinalAngle);
+                TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
+            }
+        }
+    }
+    if ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) == INVALID_ENT_REFERENCE)
+    {
+        
+        int targetPlayer = TargetClient();
+        if (IsValidClient(targetPlayer) && IsPlayerAlive(targetPlayer)) {
+            AimClient(targetPlayer);
+        }
+    }
+
+    return Plugin_Continue;
+}
+
+public void OnPreThinkBot(int entity)
+{
+	if (entity == bot && IsBotTouched)
+	{
+		float fEntityOrigin[3], fBotOrigin[3], fDistance[3], fFinalAngle[3];
+		int iEntity = -1;
+		while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) != INVALID_ENT_REFERENCE && victoryType == 0) {
+			int buttons = GetClientButtons(bot);
+			int iCurrentWeapon = GetEntPropEnt(bot, Prop_Send,"m_hActiveWeapon");
+			int iTeamRocket = GetEntProp(iEntity, Prop_Send, "m_iTeamNum");
+			GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fEntityOrigin);
+			GetClientEyePosition(bot, fBotOrigin);
+			MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fDistance);
+			GetVectorAngles(fDistance, fFinalAngle);
+			FixAngle(fFinalAngle);
+		if (iTeamRocket != 3) {
+				if (!IsBotBeatable || (IsBotBeatable && (LastDeflectionTime + CurrentReactionTime) <= GetEngineTime()))
+				{
+					
+					if(g_bSuperReflectActive && IsValidClient(g_iSuperReflectTarget) && IsPlayerAlive(g_iSuperReflectTarget))
+					{
+						float fBotEyes[3], fTargetEyes[3], fDirection[3], fAngles[3];
+						GetClientEyePosition(bot, fBotEyes);
+						GetClientEyePosition(g_iSuperReflectTarget, fTargetEyes);
+						
+						MakeVectorFromPoints(fBotEyes, fTargetEyes, fDirection);
+						GetVectorAngles(fDirection, fAngles);
+						FixAngle(fAngles);
+						TeleportEntity(bot, NULL_VECTOR, fAngles, NULL_VECTOR);
+					}
+					else
+					{
+						TeleportEntity(bot, NULL_VECTOR, fFinalAngle, NULL_VECTOR);
+					}
+				}
+				if (!IsBotBeatable)
+				{
+					SetEntPropFloat(iCurrentWeapon, Prop_Send, "m_flNextSecondaryAttack", GetGameTime());
+				}
+				SetEntProp(entity, Prop_Data, "m_nButtons", buttons);
+				IsBotTouched = false;
+			}
+		}
+	}
+	SDKUnhook(entity, SDKHook_PreThink, OnPreThinkBot);
+}
+
+public Action OnStartTouchBot(int entity, int other)
+{
+    if (victoryType == 1)
+        return Plugin_Continue;
+	
+	if (other == bot && entity != INVALID_ENT_REFERENCE)
+	{
+		SDKHook(entity, SDKHook_Touch, OnTouchBot);
+		return Plugin_Continue;
+	}
+	else if (entity == INVALID_ENT_REFERENCE)
+	{
+		SDKUnhook(entity, SDKHook_StartTouch, OnStartTouchBot);
+	}
+	
+	return Plugin_Continue;
+}
+
+public Action OnTouchBot(int entity, int other)
+{
+    if (victoryType == 1)
+        return Plugin_Continue;
+	
+	int iCurrentWeapon = GetEntPropEnt(other, Prop_Send, "m_hActiveWeapon");
+	float m_flNextSecondaryAttack = GetEntPropFloat(iCurrentWeapon, Prop_Send, "m_flNextSecondaryAttack");
+	float fGameTime = GetGameTime();
+	if (m_flNextSecondaryAttack > fGameTime)
+	{
+        if (other == bot && IsValidEntity(entity))
+        {
+
+            char classname[64];
+            GetEntityClassname(entity, classname, sizeof(classname));
+
+            if (StrEqual(classname, "tf_projectile_rocket", false))
+            {
+                g_bRocketStuckCheck[entity] = true;
+                g_fRocketStuckTime[entity] = GetGameTime();
+                GetEntPropVector(entity, Prop_Data, "m_vecOrigin", g_fLastRocketPos[entity]);
+            }
+        }
+
+		SDKUnhook(entity, SDKHook_Touch, OnTouchBot);
+		return Plugin_Handled;
+	}
+	
+	float vec[3];
+    vec[0] = 0.0;
+    vec[1] = 0.0;
+    vec[2] = 0.0;
+	
+	TeleportEntity(entity, NULL_VECTOR, NULL_VECTOR, vec);
+	IsBotTouched = true;
+	if (other == bot)
+	{
+		SDKHook(other, SDKHook_PreThink, OnPreThinkBot);
+	}
+	SDKUnhook(entity, SDKHook_Touch, OnTouchBot);
+
+    g_bRocketStuckCheck[entity] = false;
+
+	return Plugin_Handled;
+}
+
+
+
+public Action Command_PVB(int client, int args) {
+  if (IsValidClient(client)) {
+    if (!botActivated) {
+      CPrintToChatAll("%s %sPlayer vs Bot is now %sactivated", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+      EnableMode();
+    } else {
+      CPrintToChatAll("%s %sPlayer vs Bot is now %sdisabled", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+      DisableMode();
+    }
+  }
+  return Plugin_Handled;
+}
+
+
+
+public Action Command_BotModeToggle(int client, int args)
+{
+	if (IsValidClient(client))
+	{
+		if (!botActivated)
+		{
+			CReplyToCommand(client, "%s %sUnable to change Bot Mode because PvB is %sdisabled.", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+		}
+		if (!IsBotBeatable)
+		{
+			CPrintToChatAll("%s %sBot Mode changed to %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strBeatableBotMode);
+		}
+		else if (IsBotBeatable)
+		{
+			CPrintToChatAll("%s %sBot Mode changed to %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strUnbeatableBotMode);
+		}
+	}
+	return Plugin_Handled;
+}
+
+public void OnClientPutInServer(int client) {
+
+
+	if (!IsFakeClient(client))
+	{
+		bVoted[client] = false;
+		
+		int playerCount = GetAllClientCount();
+		if (playerCount == 1 && !botActivated) {
+			EnableMode();
+		}
+	}
+	
+}
+
+public Action OnPlayerSpawn(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
+	if (botActivated) {
+		int iClient = GetClientOfUserId(GetEventInt(hEvent, "userid"));
+		if (IsValidClient(iClient) && !IsFakeClient(iClient)) {
+			if (GetClientTeam(iClient) == 3) {
+				ChangeClientTeam(iClient, 2);
+			}
+		} else if (IsFakeClient(iClient) && IsOurBot(iClient)) {
+			
+			bot = iClient;
+			if (!IsBotBeatable)
+			{
+				SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
+			}
+			
+			ApplyRobotEffect(bot);
+			g_fBotSpawnTime = GetGameTime();
+			
+			if (g_bNoclipEasterEgg) {
+				SetEntityMoveType(bot, MOVETYPE_NOCLIP);
+			}
+		}
+	}
+	return Plugin_Continue;
+}
+
+public Action OnSetupFinished(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
+	if (botActivated) {
+		g_bRoundEndedByKill = false;
+		for(int i = 1; i <= MaxClients; i++) {
+			if (IsValidClient(i)) {
+				if(GetClientTeam(i) > 1) {
+					SetEntityHealth(i, 175);
+				}
+			}
+			}
+		}
+
+		if (g_bNoclipEasterEgg && IsValidClient(bot) && IsPlayerAlive(bot)) {
+			SetEntityMoveType(bot, MOVETYPE_NOCLIP);
+		}
+	return Plugin_Continue;
+}
+
+public void OnEntityCreated(int entity, const char[] classname)
+{
+	if (!StrEqual(classname, "tf_projectile_rocket", false) || !botActivated)
+		return;
+	
+	if (StrEqual(classname, "tf_projectile_rocket"))
+	{
+		rocketDeflects = 0;
+		canTrackSpeed = true;
+		g_bRocketSuperChecked[entity] = false;
+
+		g_fRocketStuckTime[entity] = 0.0;
+		g_bRocketStuckCheck[entity] = true;
+		GetEntPropVector(entity, Prop_Data, "m_vecOrigin", g_fLastRocketPos[entity]);
+	}
+	
+	SDKHook(entity, SDKHook_StartTouch, OnStartTouchBot);
+}
+
+public Action OnDeflect(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
+	int iEntity = GetEventInt(hEvent, "object_entindex");
+	int deflector = GetClientOfUserId(GetEventInt(hEvent, "userid"));
+	
+	if (botActivated) {
+		iOwner = deflector;
+		if (FindEntityByClassname(iEntity, "tf_projectile_rocket") && IsValidEntity(iEntity)) {
+			g_bRocketSuperChecked[iEntity] = false;
+			if (iOwner != bot && IsValidClient(iOwner) && IsPlayerAlive(iOwner)) {
+				LastDeflectionTime = GetGameTime();
+				CurrentReactionTime = GetRandomFloat(MinReactionTime/1000.0, MaxReactionTime/1000.0);
+				g_iConsecutiveDeflects++;
+			}
+			else if (iOwner == bot) {
+				g_iConsecutiveDeflects = 0;
+
+				if (IsHardModeFullyActive()) {
+					int target = TargetClient();
+					if (IsValidClient(target)) {
+						for (int i = 0; i < 7; i++) {
+							if (g_iPlayerFlickAttempts[target][i] > 0) {
+								g_iPlayerFlickSuccess[target][i]++;
+								break;
+							}
+						}
+					}
+				}
+
+				g_bSuperReflectActive = false;
+				g_iSuperReflectTarget = -1;
+			}
+			
+
+		}
+	}
+	
+	return Plugin_Continue;
+}
+
+public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) {
+  if (botActivated && victim == bot) {
+
+  }
+  return Plugin_Changed;
+}
+
+public Action OnPlayerDeath(Handle hEvent, char[] strEventName, bool bDontBroadcast)
+{
+    if (botActivated) {
+        int client = GetClientOfUserId(GetEventInt(hEvent, "userid"));
+        if (IsValidClient(client) && GetClientTeam(client) == 2) {
+            bool lastRedDead = true;
+            bool botAlive = IsValidClient(bot) && IsPlayerAlive(bot);
+            
+            for(int i = 1; i <= MaxClients; i++) {
+                if(IsClientInGame(i) && i != client && IsPlayerAlive(i) && GetClientTeam(i) == 2) {
+                    lastRedDead = false;
+                    break;
+                }
+            }
+            
+            if(lastRedDead && botAlive) {
+                if(g_iLaughIndex >= GetArraySize(g_aShuffledLaugh)) {
+                    ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
+                    g_iLaughIndex = 0;
+                }
+                int index = GetArrayCell(g_aShuffledLaugh, g_iLaughIndex);
+                EmitSoundToAll(laughSounds[index]);
+                g_iLaughIndex++;
+				g_iRocketHitCounter = 0;
+
+				FakeClientCommand(bot, "taunt");
+				BotSayKill(client);
+				g_bRoundEndedByKill = true;
+            }
+        }
+        
+        if(client == bot) {
+            if(g_iPainIndex >= GetArraySize(g_aShuffledPain)) {
+                ShuffleSounds(g_aShuffledPain, g_iPainIndex);
+                g_iPainIndex = 0;
+            }
+            int index = GetArrayCell(g_aShuffledPain, g_iPainIndex);
+            EmitSoundToAll(painSounds[index]);
+            g_iPainIndex++;
+			g_bRoundEndedByKill = true;
+
+			g_iRocketHitCounter = 0;
+            g_bHardModeActive = false;
+
+            if (g_bDeflectsExtended && g_fOriginalVictoryDeflects > 0.0) {
+                g_bInternalDeflectChange = true;
+                SetConVarFloat(g_hVictoryDeflects, g_fOriginalVictoryDeflects);
+                g_bInternalDeflectChange = false;
+                g_bDeflectsExtended = false;
+            }
+        }
+
+        if (IsValidClient(client) && !IsFakeClient(client)) {
+            g_iConsecutiveDeflects = 0;
+        }
+    }
+    return Plugin_Continue;
+}
+
+public Action OnRoundEnd(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
+	if (botActivated) {
+
+        g_iRocketHitCounter = 0;
+        g_bHardModeActive = false;
+        g_iProgressivePhase = 1;
+
+        if (g_bDeflectsExtended && g_fOriginalVictoryDeflects > 0.0) {
+            g_bInternalDeflectChange = true;
+            SetConVarFloat(g_hVictoryDeflects, g_fOriginalVictoryDeflects);
+            g_bInternalDeflectChange = false;
+            g_bDeflectsExtended = false;
+        }
+
+		g_bNoclipEasterEgg = false;
+		g_iEasterEggTarget = -1;
+
+        int winner = GetEventInt(hEvent, "team");
+        if (winner == 3) {
+            BotSayWin();
+			if (!g_bRoundEndedByKill) {
+				if(g_iLaughIndex >= GetArraySize(g_aShuffledLaugh)) {
+                    ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
+                    g_iLaughIndex = 0;
+                }
+                int index = GetArrayCell(g_aShuffledLaugh, g_iLaughIndex);
+                EmitSoundToAll(laughSounds[index]);
+                g_iLaughIndex++;
+				FakeClientCommand(bot, "taunt");
+			}
+        } else if (winner == 2) {
+            BotSayLose();
+			if (!g_bRoundEndedByKill) {
+				if(g_iPainIndex >= GetArraySize(g_aShuffledPain)) {
+					ShuffleSounds(g_aShuffledPain, g_iPainIndex);
+					g_iPainIndex = 0;
+				}
+				int index = GetArrayCell(g_aShuffledPain, g_iPainIndex);
+				EmitSoundToAll(painSounds[index]);
+				g_iPainIndex++;
+			}
+        }
+
+	}
+	return Plugin_Continue;
+}
+
+public void OnClientConnected(int client)
+{
+    if (IsFakeClient(client)) return;
+    bVoted[client] = false;
+    bPvBVoted[client] = false;
+    nVoters++;
+    nVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
+    nPvBVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
+}
+
+public void OnClientDisconnect(int client) {
+  if (IsFakeClient(client)) return;
+  
+  if (bVoted[client]) nVotes--;
+  if (bPvBVoted[client]) nPvBVotes--;
+  
+  nVoters--;
+  nVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
+  nPvBVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
+  
+
+    bVoted[client] = false;
+    bPvBVoted[client] = false;
+    
+    int playerCount = GetAllClientCount();
+    
+    if (playerCount == 0 && botActivated) {
+        DisableMode();
+    }
+}
+
+public Action Command_Say(int client, const char[] command, int argc)
+{
+    return Plugin_Continue;
+}
+
+
+
 public void OnGameFrame()
 {
 	new rocket = FindEntityByClassname(-1, "tf_projectile_rocket");
@@ -1636,6 +2086,27 @@ public void OnGameFrame()
 					CPrintToChatAll("%s %sDeflects extended to %s%.0f", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, newLimit);
 					
 					EmitSoundToAll("mvm/mvm_tank_start.wav");
+				}
+			}
+
+			if (GetConVarInt(g_hBotDifficulty) == 2) {
+				if (rocketDeflects < 25) {
+					if (g_iProgressivePhase != 1) {
+						g_iProgressivePhase = 1;
+						CPrintToChatAll("%s %sPhase 1: %sWarmup", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+					}
+				} else if (rocketDeflects >= 25 && rocketDeflects < 35) {
+					if (g_iProgressivePhase != 2) {
+						g_iProgressivePhase = 2;
+						CPrintToChatAll("%s %sPhase 2: %sActive", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+						BotSayRandom();
+					}
+				} else if (rocketDeflects >= 45) {
+					if (g_iProgressivePhase != 3) {
+						g_iProgressivePhase = 3;
+						CPrintToChatAll("%s %sPhase 3: %sMaximum Power", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+						BotSayRandom();
+					}
 				}
 			}
 		}
@@ -1717,164 +2188,134 @@ public void OnGameFrame()
 	}
 }
 
-stock FindRocketNearBot(int botClient, float radius)
+public Action Timer_CheckStuckRockets(Handle timer)
 {
+    if (!botActivated || !IsValidClient(bot) || !IsPlayerAlive(bot))
+        return Plugin_Continue;
 
-    if (!IsValidClient(botClient)) {
-        return -1;
-    }
+    float botPos[3];
+    GetClientEyePosition(bot, botPos);
 
-    float fBotPos[3];
-    GetClientAbsOrigin(botClient, fBotPos);
-    
-    int iEntity = -1;
-    while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_rocket")) != -1)
+    int entity = -1;
+    while ((entity = FindEntityByClassname(entity, "tf_projectile_rocket")) != -1)
     {
-        if (!IsValidEntity(iEntity)) continue;
-        
-        float fRocketPos[3];
-        GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fRocketPos);
-        if (GetVectorDistance(fBotPos, fRocketPos) <= radius)
-            return iEntity;
-    }
-    return -1;
-}
+        if (!IsValidEntity(entity) || !g_bRocketStuckCheck[entity])
+            continue;
 
-stock FindBot()
-{
-	for (new i = 1; i <= MaxClients; i++)
-	{
-		if (IsClientBot(i) && IsPlayerAlive(i))
-		{
-			return i;
-		}
-	}
-	return -1;
-}
+        float rocketPos[3];
+        GetEntPropVector(entity, Prop_Data, "m_vecOrigin", rocketPos);
 
-stock bool:IsClientBot(client)
-{
-    return client > 0 && client <= MaxClients && IsClientInGame(client) && IsFakeClient(client) && !IsClientReplay(client) && !IsClientSourceTV(client);
-}
+        float distance = GetVectorDistance(botPos, rocketPos);
 
-ShuffleSounds(Handle:array, &index)
-{
-    new size = GetArraySize(array);
-    for(new i = size - 1; i > 0; i--)
-    {
-        new j = GetRandomInt(0, i);
-        SwapArrayItems(array, i, j);
-    }
-    index = 0;
-}
-
-public Action Command_VotePvB(int client, int args) {
-    if (!IsValidClient(client)) return Plugin_Handled;
-    
-    if (IsVoteInProgress()) {
-        CReplyToCommand(client, "%s %sVote in progress.", 
-            g_strServerChatTag, g_strMainChatColor);
-        return Plugin_Handled;
-    }
-    
-    if (bVoted[client]) {
-        CReplyToCommand(client, "%s %sYou already voted.", g_strServerChatTag, g_strMainChatColor);
-        return Plugin_Handled;
-    }
-    
-    char name[MAX_NAME_LENGTH];
-    GetClientName(client, name, sizeof(name));
-    
-    nVotes++;
-    bVoted[client] = true;
-    
-    if (!botActivated)
-    {
-        CPrintToChatAll("%s %s%s wants to enable PvB. (%d/%d votes)", 
-            g_strServerChatTag, g_strMainChatColor, name, nVotes, nVotesNeeded);
-    }
-    else
-    {
-        CPrintToChatAll("%s %s%s wants to disable PvB. (%d/%d votes)", 
-            g_strServerChatTag, g_strMainChatColor, name, nVotes, nVotesNeeded);
-    }
-    
-    if (nVotes >= nVotesNeeded)
-    {
-        if (!botActivated)
+        if (distance < 200.0)
         {
-            CPrintToChatAll("%s %sEnabling PvB!", 
-                g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
-            botActivated = true;
-            IsBotBeatable = false;
-            EnableMode();
+
+            float moveDistance = GetVectorDistance(g_fLastRocketPos[entity], rocketPos);
+
+            if (moveDistance < 10.0)
+            {
+                if (g_fRocketStuckTime[entity] == 0.0)
+                {
+                    g_fRocketStuckTime[entity] = GetGameTime();
+                }
+                else if (GetGameTime() - g_fRocketStuckTime[entity] > 0.2)
+                {
+
+                    ForceReflectStuckRocket(entity);
+                    g_bRocketStuckCheck[entity] = false; 
+                }
+            }
+            else
+            {
+                g_fRocketStuckTime[entity] = 0.0; 
+            }
+
+            g_fLastRocketPos[entity][0] = rocketPos[0];
+            g_fLastRocketPos[entity][1] = rocketPos[1];
+            g_fLastRocketPos[entity][2] = rocketPos[2];
         }
         else
         {
-            CPrintToChatAll("%s %sDisabling PvB.", 
-                g_strServerChatTag, g_strMainChatColor);
-            botActivated = false;
-            DisableMode();
+
+            g_fRocketStuckTime[entity] = 0.0;
         }
-        ResetVotes();
-        CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
     }
-    return Plugin_Handled;
-}
 
-public Action Timer_ResetVote(Handle timer)
-{
-    g_bVoteCooldown = false;
-    return Plugin_Continue;
-}
-
-void ResetVotes()
-{
-    nVotes = 0;
-    for (int i = 1; i <= MaxClients; i++) bVoted[i] = false;
-}
-
-public void OnClientConnected(int client)
-{
-    if (IsFakeClient(client)) return;
-    bVoted[client] = false;
-    nVoters++;
-    nVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
-}
-
-public Action Command_Say(int client, const char[] command, int argc)
-{
-    if (!client || IsChatTrigger()) return Plugin_Continue;
-    
-    char sMessage[256];
-    GetCmdArgString(sMessage, sizeof(sMessage));
-    StripQuotes(sMessage);
-    TrimString(sMessage);
-    
-    char sLowerMessage[256];
-    strcopy(sLowerMessage, sizeof(sLowerMessage), sMessage);
-    String_ToLower(sLowerMessage);
-
-    if (StrEqual(sLowerMessage, "!votepvb") || StrEqual(sLowerMessage, "/votepvb"))
-    {
-        FakeClientCommand(client, "sm_votepvb");
-        return Plugin_Handled;
-    }
-    else if (StrEqual(sLowerMessage, "!votedif") || StrEqual(sLowerMessage, "/votedif"))
-    {
-        FakeClientCommand(client, "sm_votedif");
-        return Plugin_Handled;
+    if (botActivated) {
+        BotSayStart();
     }
     
     return Plugin_Continue;
 }
 
-stock void String_ToLower(char[] str)
+void ForceReflectStuckRocket(int rocket)
 {
-    int len = strlen(str);
-    for (int i = 0; i < len; i++)
+    if (!IsValidEntity(rocket) || !IsValidClient(bot) || !IsPlayerAlive(bot))
+        return;
+
+    char classname[64];
+    GetEntityClassname(rocket, classname, sizeof(classname));
+
+    if (!StrEqual(classname, "tf_projectile_rocket", false))
+        return;
+
+    float rocketPos[3], botPos[3], botAngles[3];
+    GetEntPropVector(rocket, Prop_Data, "m_vecOrigin", rocketPos);
+    GetClientEyePosition(bot, botPos);
+    GetClientEyeAngles(bot, botAngles);
+
+    float botDirection[3], toRocket[3];
+    GetAngleVectors(botAngles, botDirection, NULL_VECTOR, NULL_VECTOR);
+    SubtractVectors(rocketPos, botPos, toRocket);
+    NormalizeVector(toRocket, toRocket);
+    float dotProduct = GetVectorDotProduct(botDirection, toRocket);
+
+    if (dotProduct > 0.5)  
     {
-        str[i] = CharToLower(str[i]);
+
+        int target = TargetClient();
+
+        float direction[3];
+
+        if (IsValidClient(target))
+        {
+            float targetPos[3];
+            GetClientAbsOrigin(target, targetPos);
+            targetPos[2] += 40.0; 
+
+            SubtractVectors(targetPos, rocketPos, direction);
+        }
+        else
+        {
+
+            GetAngleVectors(botAngles, direction, NULL_VECTOR, NULL_VECTOR);
+        }
+
+        NormalizeVector(direction, direction);
+
+        float currentVelocity[3];
+        GetEntPropVector(rocket, Prop_Data, "m_vecAbsVelocity", currentVelocity);
+        float speed = GetVectorLength(currentVelocity);
+
+        if (speed < 100.0)
+            speed = 1100.0;
+
+        ScaleVector(direction, speed);
+
+        SetEntProp(rocket, Prop_Send, "m_iTeamNum", 3); 
+
+        int deflects = GetEntProp(rocket, Prop_Send, "m_iDeflected");
+        SetEntProp(rocket, Prop_Send, "m_iDeflected", deflects + 1);
+
+        TeleportEntity(rocket, NULL_VECTOR, NULL_VECTOR, direction);
+
+        float botHand[3];
+        botHand[0] = botPos[0] + botDirection[0] * 20.0;
+        botHand[1] = botPos[1] + botDirection[1] * 20.0;
+        botHand[2] = botPos[2] + botDirection[2] * 20.0;
+
+        TE_SetupGlowSprite(botHand, PrecacheModel("materials/sprites/blueglow2.vmt"), 0.2, 1.0, 255);
+        TE_SendToAll();
     }
 }
 
@@ -1901,6 +2342,109 @@ public Action Timer_AddHardModeDeflects(Handle timer, int hitNumber)
     }
     
     return Plugin_Continue;
+}
+
+
+
+public Action Command_VotePvB(int client, int args) {
+    if (!IsValidClient(client)) return Plugin_Handled;
+    
+    if (g_fPvBVoteCooldownEndTime > GetGameTime()) {
+        float remaining = g_fPvBVoteCooldownEndTime - GetGameTime();
+        CReplyToCommand(client, "%s %sPlease wait %.1f seconds.", g_strServerChatTag, g_strMainChatColor, remaining);
+        return Plugin_Handled;
+    }
+
+    if (bPvBVoted[client]) {
+        CReplyToCommand(client, "%s %sYou already voted.", g_strServerChatTag, g_strMainChatColor);
+        return Plugin_Handled;
+    }
+    
+    char name[MAX_NAME_LENGTH];
+    GetClientName(client, name, sizeof(name));
+    
+    nPvBVotes++;
+    bPvBVoted[client] = true;
+    
+    if (!botActivated)
+    {
+        CPrintToChatAll("%s %s%s %swants to %senable %sPvB. (%d/%d votes)", 
+            g_strServerChatTag, g_strClientChatColor, name, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor, nPvBVotes, nPvBVotesNeeded);
+    }
+    else
+    {
+        CPrintToChatAll("%s %s%s %swants to %sdisable %sPvB. (%d/%d votes)", 
+            g_strServerChatTag, g_strClientChatColor, name, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor, nPvBVotes, nPvBVotesNeeded);
+    }
+    
+    if (nPvBVotes >= nPvBVotesNeeded)
+    {
+        if (!botActivated)
+        {
+            CPrintToChatAll("%s %sPlayer vs Bot is now %sactivated!", g_strServerChatTag, g_strUnbeatableBotMode, g_strMainChatColor, g_strKeywordChatColor);
+            IsBotBeatable = false;
+            EnableMode();
+        }
+        else
+        {
+            CPrintToChatAll("%s %sPlayer vs Bot is now%s disabled!", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+            DisableMode();
+        }
+        
+        ResetPvBVotes();
+        g_fPvBVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
+    }
+    return Plugin_Handled;
+}
+
+void ResetPvBVotes() {
+    nPvBVotes = 0;
+    for (int i = 1; i <= MaxClients; i++) bPvBVoted[i] = false;
+}
+
+public Action Timer_ResetVote(Handle timer)
+{
+    
+    if (g_iPendingVoteType != 0) {
+        int nextVote = g_iPendingVoteType;
+        g_iPendingVoteType = 0;
+        
+        if (nextVote == -1) {
+             CPrintToChatAll("%s %sStarting queued vote: %sPvB", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+             Command_VotePvB(0, 0);
+        } else if (nextVote == 3) {
+             CPrintToChatAll("%s %sStarting queued vote: %sDeflects", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+             StartDeflectsVoteMenu();
+        } else if (nextVote == 4) {
+             CPrintToChatAll("%s %sStarting queued vote: %sSuper Chance", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+             StartSuperVoteMenu();
+        } else if (nextVote == 5) {
+             CPrintToChatAll("%s %sStarting queued vote: %sMovement", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor);
+             StartMovementVoteMenu();
+        }
+    }
+    
+    return Plugin_Continue;
+}
+
+public Action Command_Revote(int client, int args) {
+    if (!IsValidClient(client)) return Plugin_Handled;
+    
+    if (!IsVoteInProgress()) {
+        CReplyToCommand(client, "%s %sNo vote in progress.", g_strServerChatTag, g_strMainChatColor);
+        return Plugin_Handled;
+    }
+    
+    if (g_hCurrentVoteMenu == null) {
+        CReplyToCommand(client, "%s %sCannot revote in this poll.", g_strServerChatTag, g_strMainChatColor);
+        return Plugin_Handled;
+    }
+    
+    int clients[1];
+    clients[0] = client;
+    VoteMenu(g_hCurrentVoteMenu, clients, 1, 20);
+    
+    return Plugin_Handled;
 }
 
 public Action Command_BotMenu(int client, int args)
@@ -1949,7 +2493,22 @@ public void AdminTypeMenuHandler(Handle menu, MenuAction action, int client, int
 
 void ShowUserMenu(int client) {
     Handle menu = CreateMenu(UserMenuHandler);
-    SetMenuTitle(menu, "=== VOTING ===");
+    
+    char title[256];
+    int currentDiff = GetConVarInt(g_hBotDifficulty);
+    char diffName[32];
+    if (currentDiff == 0) Format(diffName, sizeof(diffName), "Normal");
+    else if (currentDiff == 1) Format(diffName, sizeof(diffName), "Hard");
+    else if (currentDiff == 2) Format(diffName, sizeof(diffName), "Progressive (Phase %d)", g_iProgressivePhase);
+
+    Format(title, sizeof(title), "=== BOT STATUS ===\nPvB: %s\nDifficulty: %s\nSuper: %.0f%%\nDeflects: %.0f\nMovement: %s\n------------------", 
+        botActivated ? "ON" : "OFF",
+        diffName,
+        GetConVarFloat(g_hAimChance) * 100.0,
+        GetConVarFloat(g_hVictoryDeflects),
+        g_bBotMovement ? "ON" : "OFF"
+    );
+    SetMenuTitle(menu, title);
     
     AddMenuItem(menu, "vote_pvb", "Vote PvB");
     AddMenuItem(menu, "vote_diff", "Vote Difficulty");
@@ -1991,30 +2550,31 @@ public void UserMenuHandler(Handle menu, MenuAction action, int client, int item
 
 void ShowAdminMenu(int client) {
     Handle menu = CreateMenu(AdminMenuHandler);
-    SetMenuTitle(menu, "=== ADMIN ===");
+    
+    char title[256];
+    int currentDiff = GetConVarInt(g_hBotDifficulty);
+    char diffName[32];
+    if (currentDiff == 0) Format(diffName, sizeof(diffName), "Normal");
+    else if (currentDiff == 1) Format(diffName, sizeof(diffName), "Hard");
+    else if (currentDiff == 2) Format(diffName, sizeof(diffName), "Progressive (Phase %d)", g_iProgressivePhase);
+
+    Format(title, sizeof(title), "=== [ADMIN] BOT CONTROL ===\nPvB: %s\nDifficulty: %s\nSuper: %.0f%% | Deflects: %.0f\nMovement: %s\n------------------", 
+        botActivated ? "ON" : "OFF",
+        diffName,
+        GetConVarFloat(g_hAimChance) * 100.0,
+        GetConVarFloat(g_hVictoryDeflects),
+        g_bBotMovement ? "ON" : "OFF"
+    );
+    SetMenuTitle(menu, title);
 
     char pvbStatus[64];
-    Format(pvbStatus, sizeof(pvbStatus), "PvB: %s", botActivated ? "[ON]" : "[OFF]");
+    Format(pvbStatus, sizeof(pvbStatus), "Toggle PvB [%s]", botActivated ? "OFF" : "ON");
     AddMenuItem(menu, "toggle_pvb", pvbStatus);
 
-    char diffStatus[64];
-    int currentDiff = GetConVarInt(g_hBotDifficulty);
-    Format(diffStatus, sizeof(diffStatus), "Difficulty: %s", currentDiff == 0 ? "Normal" : "Hard");
-    AddMenuItem(menu, "toggle_diff", diffStatus);
-
-    char superStatus[64];
-    float superChance = GetConVarFloat(g_hAimChance);
-    Format(superStatus, sizeof(superStatus), "Super: %.0f%%", superChance * 100.0);
-    AddMenuItem(menu, "super_menu", superStatus);
-
-    char deflectsStatus[64];
-    float deflects = GetConVarFloat(g_hVictoryDeflects);
-    Format(deflectsStatus, sizeof(deflectsStatus), "Deflects: %.0f", deflects);
-    AddMenuItem(menu, "deflects_menu", deflectsStatus);
-
-    char movementStatus[64];
-    Format(movementStatus, sizeof(movementStatus), "Movement: %s", g_bBotMovement ? "[ON]" : "[OFF]");
-    AddMenuItem(menu, "toggle_movement", movementStatus);
+    AddMenuItem(menu, "toggle_diff", "Change Difficulty");
+    AddMenuItem(menu, "super_menu", "Set Super Chance");
+    AddMenuItem(menu, "deflects_menu", "Set Deflects Limit");
+    AddMenuItem(menu, "toggle_movement", "Toggle Movement");
     
     SetMenuExitButton(menu, true);
     DisplayMenu(menu, client, 30);
@@ -2039,16 +2599,19 @@ public void AdminMenuHandler(Handle menu, MenuAction action, int client, int ite
             }
             else if(StrEqual(info, "toggle_diff")) {
                 int currentDiff = GetConVarInt(g_hBotDifficulty);
-                int newDiff = (currentDiff == 0) ? 1 : 0;
+                int newDiff = (currentDiff + 1) % 3;
                 SetConVarInt(g_hBotDifficulty, newDiff);
                 
                 if (newDiff == 1) {
-                    
                     g_bHardModeActive = false;
                     g_iRocketHitCounter = 0;
                     ResetPlayerFlickStats();
+                } else if (newDiff == 2) {
+                    g_bHardModeActive = false;
+                    g_iRocketHitCounter = 0;
+                    g_iProgressivePhase = 1;
+                    ResetPlayerFlickStats();
                 } else {
-                    
                     g_bHardModeActive = false;
                     g_iRocketHitCounter = 0;
                     ResetPlayerFlickStats();
@@ -2163,8 +2726,10 @@ void StartDifficultyVote()
     
     AddMenuItem(menu, "0", "Normal");
     AddMenuItem(menu, "1", "Hard");
+    AddMenuItem(menu, "2", "Progressive");
     
     SetMenuExitButton(menu, true);
+    g_hCurrentVoteMenu = menu;
     VoteMenuToAll(menu, GetConVarInt(g_hCvarVoteTime));
 }
 
@@ -2204,6 +2769,13 @@ public void DifficultyVoteHandler(Handle menu, MenuAction action, int param1, in
                 
                 CPrintToChatAll("%s %s%sHARD%s mode activates after first hit.", 
                     g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor);
+            } else if (difficulty == 2) {
+                g_bHardModeActive = false;
+                g_iRocketHitCounter = 0;
+                g_iProgressivePhase = 1;
+                
+                CPrintToChatAll("%s %s%sPROGRESSIVE%s mode activated.", 
+                    g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor);
             } else {
                 g_bHardModeActive = false;
 
@@ -2214,11 +2786,16 @@ public void DifficultyVoteHandler(Handle menu, MenuAction action, int param1, in
                 }
             }
             
+            char diffName[32];
+            if (difficulty == 0) Format(diffName, sizeof(diffName), "NORMAL");
+            else if (difficulty == 1) Format(diffName, sizeof(diffName), "HARD");
+            else if (difficulty == 2) Format(diffName, sizeof(diffName), "PROGRESSIVE");
+
             CPrintToChatAll("%s %sDifficulty: %s%s", 
                 g_strServerChatTag, 
                 g_strMainChatColor,
                 g_strKeywordChatColor,
-                difficulty == 1 ? "HARD" : "NORMAL");
+                diffName);
         }
     }
 }
@@ -2238,14 +2815,23 @@ void ResetChatVote()
 public Action Command_VoteDeflects(int client, int args) {
     if (!IsValidClient(client)) return Plugin_Handled;
     
-    if (g_bVoteCooldown) {
-        CReplyToCommand(client, "%s %sPlease wait.", g_strServerChatTag, g_strMainChatColor);
+    if (g_fVoteCooldownEndTime > GetGameTime()) {
+        float remaining = g_fVoteCooldownEndTime - GetGameTime();
+        CReplyToCommand(client, "%s %sPlease wait %.1f seconds.", g_strServerChatTag, g_strMainChatColor, remaining);
         return Plugin_Handled;
     }
     
-    if (IsVoteInProgress()) {
-        CReplyToCommand(client, "%s %sVote in progress.", g_strServerChatTag, g_strMainChatColor);
+    if (GetConVarInt(g_hBotDifficulty) == 2) {
+        CReplyToCommand(client, "%s %sThis vote is disabled in Progressive Mode.", g_strServerChatTag, g_strMainChatColor);
         return Plugin_Handled;
+    }
+
+    if (IsVoteInProgress()) {
+        if (g_iVoteType != 3) {
+             CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
+             g_iPendingVoteType = 3;
+             return Plugin_Handled;
+        }
     }
 
     if (g_iVoteType == 3) {
@@ -2301,14 +2887,18 @@ void StartDeflectsVoteMenu() {
     AddMenuItem(menu, "70", "70");
     AddMenuItem(menu, "100", "100");
     AddMenuItem(menu, "150", "150");
+    g_hCurrentVoteMenu = menu;
     VoteMenuToAll(menu, GetConVarInt(g_hCvarVoteTime));
 }
 
 public void DeflectsVoteHandler(Handle menu, MenuAction action, int param1, int param2) {
     switch (action) {
-        case MenuAction_End: CloseHandle(menu);
+        case MenuAction_End: {
+            g_hCurrentVoteMenu = null;
+            CloseHandle(menu);
+        }
         case MenuAction_VoteCancel: {
-            g_bVoteCooldown = true;
+            g_fVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
             CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
         }
         case MenuAction_VoteEnd: {
@@ -2316,7 +2906,7 @@ public void DeflectsVoteHandler(Handle menu, MenuAction action, int param1, int 
             GetMenuItem(menu, param1, item, sizeof(item));
             SetConVarFloat(g_hVictoryDeflects, StringToFloat(item));
             CPrintToChatAll("%s %sDeflects: %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, item);
-            g_bVoteCooldown = true;
+            g_fVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
             CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
         }
     }
@@ -2325,14 +2915,23 @@ public void DeflectsVoteHandler(Handle menu, MenuAction action, int param1, int 
 public Action Command_VoteSuper(int client, int args) {
     if (!IsValidClient(client)) return Plugin_Handled;
     
-    if (g_bVoteCooldown) {
-        CReplyToCommand(client, "%s %sPlease wait.", g_strServerChatTag, g_strMainChatColor);
+    if (g_fVoteCooldownEndTime > GetGameTime()) {
+        float remaining = g_fVoteCooldownEndTime - GetGameTime();
+        CReplyToCommand(client, "%s %sPlease wait %.1f seconds.", g_strServerChatTag, g_strMainChatColor, remaining);
         return Plugin_Handled;
     }
     
-    if (IsVoteInProgress()) {
-        CReplyToCommand(client, "%s %sVote in progress.", g_strServerChatTag, g_strMainChatColor);
+    if (GetConVarInt(g_hBotDifficulty) == 2) {
+        CReplyToCommand(client, "%s %sThis vote is disabled in Progressive Mode.", g_strServerChatTag, g_strMainChatColor);
         return Plugin_Handled;
+    }
+
+    if (IsVoteInProgress()) {
+        if (g_iVoteType != 4) {
+             CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
+             g_iPendingVoteType = 4;
+             return Plugin_Handled;
+        }
     }
     
     if (g_iVoteType == 4) {
@@ -2387,14 +2986,18 @@ void StartSuperVoteMenu() {
     AddMenuItem(menu, "50", "50%");
     AddMenuItem(menu, "75", "75%");
     AddMenuItem(menu, "100", "100%");
+    g_hCurrentVoteMenu = menu;
     VoteMenuToAll(menu, GetConVarInt(g_hCvarVoteTime));
 }
 
 public void SuperVoteHandler(Handle menu, MenuAction action, int param1, int param2) {
     switch (action) {
-        case MenuAction_End: CloseHandle(menu);
+        case MenuAction_End: {
+            g_hCurrentVoteMenu = null;
+            CloseHandle(menu);
+        }
         case MenuAction_VoteCancel: {
-            g_bVoteCooldown = true;
+            g_fVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
             CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
         }
         case MenuAction_VoteEnd: {
@@ -2403,7 +3006,7 @@ public void SuperVoteHandler(Handle menu, MenuAction action, int param1, int par
             float chance = StringToFloat(item) / 100.0;
             SetConVarFloat(g_hAimChance, chance);
             CPrintToChatAll("%s %sSuper: %s%s%%", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, item);
-            g_bVoteCooldown = true;
+            g_fVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
             CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
         }
     }
@@ -2412,14 +3015,23 @@ public void SuperVoteHandler(Handle menu, MenuAction action, int param1, int par
 public Action Command_VoteMovement(int client, int args) {
     if (!IsValidClient(client)) return Plugin_Handled;
     
-    if (g_bVoteCooldown) {
-        CReplyToCommand(client, "%s %sPlease wait.", g_strServerChatTag, g_strMainChatColor);
+    if (g_fVoteCooldownEndTime > GetGameTime()) {
+        float remaining = g_fVoteCooldownEndTime - GetGameTime();
+        CReplyToCommand(client, "%s %sPlease wait %.1f seconds.", g_strServerChatTag, g_strMainChatColor, remaining);
         return Plugin_Handled;
     }
     
-    if (IsVoteInProgress()) {
-        CReplyToCommand(client, "%s %sVote in progress.", g_strServerChatTag, g_strMainChatColor);
+    if (GetConVarInt(g_hBotDifficulty) == 2) {
+        CReplyToCommand(client, "%s %sThis vote is disabled in Progressive Mode.", g_strServerChatTag, g_strMainChatColor);
         return Plugin_Handled;
+    }
+
+    if (IsVoteInProgress()) {
+        if (g_iVoteType != 5) {
+             CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
+             g_iPendingVoteType = 5;
+             return Plugin_Handled;
+        }
     }
     
     if (g_iVoteType == 5) {
@@ -2468,58 +3080,377 @@ public Action Command_VoteMovement(int client, int args) {
 
 void StartMovementVoteMenu() {
     Handle menu = CreateMenu(MovementVoteHandler);
-    SetMenuTitle(menu, "Bot Movement:\n ");
-    AddMenuItem(menu, "0", "Disabled");
-    AddMenuItem(menu, "1", "Enabled");
+    SetMenuTitle(menu, "Enable Bot Movement:\n ");
+    AddMenuItem(menu, "1", "Yes");
+    AddMenuItem(menu, "0", "No");
+    g_hCurrentVoteMenu = menu;
     VoteMenuToAll(menu, GetConVarInt(g_hCvarVoteTime));
 }
 
 public void MovementVoteHandler(Handle menu, MenuAction action, int param1, int param2) {
     switch (action) {
-        case MenuAction_End: CloseHandle(menu);
+        case MenuAction_End: {
+            g_hCurrentVoteMenu = null;
+            CloseHandle(menu);
+        }
         case MenuAction_VoteCancel: {
-            g_bVoteCooldown = true;
+            g_fVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
             CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
         }
         case MenuAction_VoteEnd: {
             char item[64];
             GetMenuItem(menu, param1, item, sizeof(item));
-            g_bBotMovement = (StringToInt(item) == 1);
-            SetConVarBool(g_hBotMovement, g_bBotMovement);
-            CPrintToChatAll("%s %sMovement: %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, 
-                g_bBotMovement ? "Enabled" : "Disabled");
-            g_bVoteCooldown = true;
+            bool enable = view_as<bool>(StringToInt(item));
+            SetConVarBool(g_hBotMovement, enable);
+            CPrintToChatAll("%s %sMovement: %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, enable ? "Enabled" : "Disabled");
+            g_fVoteCooldownEndTime = GetGameTime() + GetConVarFloat(cvarVoteCooldown);
             CreateTimer(GetConVarFloat(cvarVoteCooldown), Timer_ResetVote);
         }
     }
 }
 
-void ResetPlayerFlickStats()
-{
-    for (int client = 1; client <= MAXPLAYERS; client++) {
-        for (int i = 0; i < 7; i++) {
-            g_iPlayerFlickSuccess[client][i] = 0;
-            g_iPlayerFlickAttempts[client][i] = 0;
+public Action Command_BotBeatable(int client, int args) {
+    if (args < 1) {
+        IsBotBeatable = !IsBotBeatable;
+    } else {
+        char arg[16];
+        GetCmdArg(1, arg, sizeof(arg));
+        IsBotBeatable = (StringToInt(arg) != 0);
+    }
+    
+    if (!IsBotBeatable && botActivated && IsPlayerAlive(bot)) {
+        SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
+    }
+    
+    CReplyToCommand(client, "%s %sBot Beatable: %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, IsBotBeatable ? "ON" : "OFF");
+    return Plugin_Handled;
+}
+
+
+
+/**
+ * DBBOT/messages.inl
+ * Handles bot chat messages and commands.
+ * Add your messages in the arrays below using the format: "PROBABILITY|MESSAGE"
+ * Example: "10|Hello" means 10% chance to say "Hello".
+ * If the total probability for a category is less than 100%, the remaining chance is for silence.
+ */
+
+// Messages sent when the round starts or bot joins
+char g_strStartMessages[][] = {
+    "20|gl hf",
+    "20|ready?",
+    "10|lets go",
+    "10|training time",
+    "5|beep boop"
+};
+
+// Messages sent when the bot wins the round
+char g_strWinMessages[][] = {
+    "30|gg",
+    "20|nice try",
+    "10|close one",
+    "10|good game",
+    "5|wp"
+};
+
+// Messages sent when the bot loses the round
+char g_strLoseMessages[][] = {
+    "20|ns",
+    "20|nice shot",
+    "10|wow",
+    "10|you got me",
+    "5|gg wp"
+};
+
+// Messages sent when the bot kills a player
+// Use {victim} to insert the victim's name
+char g_strKillMessages[][] = {
+    "20|oops {victim}",
+    "20|sorry {victim}",
+    "10|nice try {victim}",
+    "10|almost {victim}",
+    "5|cya {victim}"
+};
+
+// Random messages sent periodically
+char g_strRandomMessages[][] = {
+    "10|i am learning",
+    "10|dodgeball is fun",
+    "10|nice server",
+    "5|beep boop",
+    "5|:)"
+};
+
+Handle g_hRandomMessageTimer = null;
+
+void InitMessageSystem() {
+    if (g_hRandomMessageTimer != null) {
+        KillTimer(g_hRandomMessageTimer);
+    }
+    g_hRandomMessageTimer = CreateTimer(GetRandomFloat(60.0, 120.0), Timer_RandomMessage);
+}
+
+public Action Timer_RandomMessage(Handle timer) {
+    if (botActivated && IsValidClient(bot) && IsPlayerAlive(bot)) {
+        BotSayRandom();
+    }
+    
+    g_hRandomMessageTimer = CreateTimer(GetRandomFloat(60.0, 120.0), Timer_RandomMessage);
+    return Plugin_Stop;
+}
+
+void BotChat(const char[] message) {
+    if (!botActivated || !IsValidClient(bot)) return;
+    
+    // Use FakeClientCommand to make the bot "say" it in chat.
+    // This allows it to execute chat commands too if the message starts with ! or /
+    FakeClientCommand(bot, "say %s", message);
+}
+
+bool GetWeightedMessage(char[][] messageArray, int arraySize, char[] outputBuffer, int outputSize) {
+    float roll = GetRandomFloat(0.0, 100.0);
+    float currentWeight = 0.0;
+    
+    for(int i=0; i < arraySize; i++) {
+        char entry[256];
+        strcopy(entry, sizeof(entry), messageArray[i]);
+        
+        char parts[2][256];
+        if (ExplodeString(entry, "|", parts, 2, 256) == 2) {
+            float chance = StringToFloat(parts[0]);
+            currentWeight += chance;
+            
+            if (roll <= currentWeight) {
+                strcopy(outputBuffer, outputSize, parts[1]);
+                return true;
+            }
         }
+    }
+    
+    return false;
+}
+
+void BotSayStart() {
+    char message[256];
+    if (GetWeightedMessage(g_strStartMessages, sizeof(g_strStartMessages), message, sizeof(message))) {
+        BotChat(message);
     }
 }
 
-void ResetPerformanceStats()
-{
-    g_iConsecutiveDeflects = 0;
-
-    g_bHardModeActive = false;
-    g_bDeflectsExtended = false;
-    g_iRocketHitCounter = 0;
-
-    if (g_fOriginalVictoryDeflects > 0.0) {
-        g_bInternalDeflectChange = true;
-        SetConVarFloat(g_hVictoryDeflects, g_fOriginalVictoryDeflects);
-        g_bInternalDeflectChange = false;
-        g_fOriginalVictoryDeflects = 0.0;
+void BotSayWin() {
+    char message[256];
+    if (GetWeightedMessage(g_strWinMessages, sizeof(g_strWinMessages), message, sizeof(message))) {
+        BotChat(message);
     }
+}
 
-    ResetPlayerFlickStats();
+void BotSayLose() {
+    char message[256];
+    if (GetWeightedMessage(g_strLoseMessages, sizeof(g_strLoseMessages), message, sizeof(message))) {
+        BotChat(message);
+    }
+}
+
+void BotSayKill(int victim) {
+    char message[256];
+    if (GetWeightedMessage(g_strKillMessages, sizeof(g_strKillMessages), message, sizeof(message))) {
+        char name[MAX_NAME_LENGTH];
+        GetClientName(victim, name, sizeof(name));
+        ReplaceString(message, sizeof(message), "{victim}", name);
+        BotChat(message);
+    }
+}
+
+void BotSayRandom() {
+    char message[256];
+    if (GetWeightedMessage(g_strRandomMessages, sizeof(g_strRandomMessages), message, sizeof(message))) {
+        BotChat(message);
+    }
+}
+
+
+
+/**
+ * DBBOT/parts/10_movement.sp
+ * Handles bot movement logic and player movement analysis.
+ */
+
+void ManeuverBotAgainstClient(int client) {
+	bool allowMovement = g_bBotMovement;
+	if (GetConVarInt(g_hBotDifficulty) == 2) {
+		if (g_iProgressivePhase == 1) allowMovement = false;
+		else allowMovement = true;
+	}
+
+	if (!allowMovement) return;
+	
+	float client_position[3];
+	GetEntPropVector(client, Prop_Send, "m_vecOrigin", client_position);
+	
+	float bot_position[3];
+	GetEntPropVector(bot, Prop_Send, "m_vecOrigin", bot_position);
+	
+	float spawner_position[3];
+	int entity_id = -1;
+	while((entity_id = FindEntityByClassname(entity_id, "info_target")) != -1) {
+		char entity_name[50];
+		GetEntPropString(entity_id, Prop_Data, "m_iName", entity_name, sizeof(entity_name));
+		
+		if(strcmp(entity_name, "rocket_spawn_blue", false) == 0) {
+			break;
+		}
+	}
+	GetEntPropVector(entity_id, Prop_Send, "m_vecOrigin", spawner_position);
+	
+	float endpoint[3]; 
+	endpoint[0] = (2 * spawner_position[0]) - client_position[0];
+	endpoint[1] = (2 * spawner_position[1]) - client_position[1];
+	endpoint[2] = bot_position[2];
+	
+	float fVelocity[3];
+	MakeVectorFromPoints(bot_position, endpoint, fVelocity);
+	NormalizeVector(fVelocity, fVelocity);
+	ScaleVector(fVelocity, 500.0);
+	
+	fVelocity[2] = 0.0;
+
+	if(GetVectorDistance(endpoint, bot_position) < 20) {
+		ScaleVector(fVelocity, 0.0);
+	} else if(GetVectorDistance(endpoint, bot_position) < 30) {
+		ScaleVector(fVelocity, 0.2);
+	} else if(GetVectorDistance(endpoint, bot_position) < 50) {
+		ScaleVector(fVelocity, 0.5);
+	}
+	TeleportEntity(bot, NULL_VECTOR, NULL_VECTOR, fVelocity);
+}
+
+void OrbitRocket() {
+    bool allowMovement = g_bBotMovement;
+	if (GetConVarInt(g_hBotDifficulty) == 2) {
+		if (g_iProgressivePhase == 1) allowMovement = false;
+		else allowMovement = true;
+	}
+
+    if (!allowMovement) return;
+
+	int iEntity = -1;
+	float fBotOrigin[3], angles[3], fEntityOrigin[3], fAngleToRocket[3], fRocketAngles[3], fRocketVelocity[3], fDistance;
+	static float fBotStopOrbitTime;
+    static float fLastOrbitTime;
+
+	while ((iEntity = FindEntityByClassname(iEntity, "tf_projectile_*")) != INVALID_ENT_REFERENCE) {
+		int iTeamRocket = GetEntProp(iEntity, Prop_Send, "m_iTeamNum");
+		GetClientEyeAngles(bot, angles);
+		GetEntPropVector(iEntity, Prop_Data, "m_vecOrigin", fEntityOrigin);
+		GetEntPropVector(iEntity, Prop_Data, "m_vecAbsVelocity", fRocketVelocity);
+		int iCurrentWeapon = GetEntPropEnt(bot, Prop_Send, "m_hActiveWeapon");
+		float m_flNextSecondaryAttack = GetEntPropFloat(iCurrentWeapon, Prop_Send, "m_flNextSecondaryAttack");
+		float fGameTime = GetGameTime();
+		GetClientEyePosition(bot, fBotOrigin);
+		fDistance = GetVectorDistance(fBotOrigin, fEntityOrigin, false);
+		GetEntPropVector(iEntity, Prop_Send, "m_angRotation", fRocketAngles);
+		GetAngleVectors(fRocketAngles, fRocketAngles, NULL_VECTOR, NULL_VECTOR);
+		
+		fAngleToRocket[0] = 0.0 - RadToDeg(ArcTangent((fEntityOrigin[2] - fBotOrigin[2]) / (FloatAbs(SquareRoot(Pow(fBotOrigin[0] - fEntityOrigin[0], 2.0) + Pow(fEntityOrigin[1] - fBotOrigin[1], 2.0))))));
+		fAngleToRocket[1] = GetAngleX(fBotOrigin, fEntityOrigin);
+		AnglesNormalize(fAngleToRocket);
+		float randFloat = GetRandomFloat();
+		
+		bool allowOrbit = true;
+		if (GetConVarInt(g_hBotDifficulty) == 2 && g_iProgressivePhase < 3) allowOrbit = false;
+
+        bool forceOrbit = false;
+        if (g_bSuperReflectActive) {
+            if (IsValidClient(g_iSuperReflectTarget) && IsPlayerAlive(g_iSuperReflectTarget)) {
+                float fBotForward[3], fToRocket[3], fTargetPos[3];
+                GetClientEyePosition(g_iSuperReflectTarget, fTargetPos);
+                
+                MakeVectorFromPoints(fBotOrigin, fTargetPos, fBotForward);
+                NormalizeVector(fBotForward, fBotForward);
+
+                MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fToRocket);
+                NormalizeVector(fToRocket, fToRocket);
+
+                float dot = GetVectorDotProduct(fBotForward, fToRocket);
+                
+                if (dot < 0.9) {
+                    forceOrbit = true;
+                }
+            } else {
+                forceOrbit = false; 
+            }
+        }
+
+        float orbitCooldown = 8.0;
+        int difficulty = GetConVarInt(g_hBotDifficulty);
+        
+        if (difficulty == 1) {
+            orbitCooldown = 5.0;
+        } else if (difficulty == 2) {
+            if (g_iProgressivePhase >= 3) {
+                orbitCooldown = 3.0;
+            } else {
+                orbitCooldown = 5.0;
+            }
+        }
+
+        bool randomOrbit = (randFloat <= (OrbitChance/100.0) && (fGameTime - fLastOrbitTime > orbitCooldown));
+
+		if (allowOrbit && fDistance < 500.0 && iTeamRocket != 3 && 
+            ((RoundFloat(GetVectorLength(fRocketVelocity) * (15.0/352.0)) <= MaxOrbitSpeed || MaxOrbitSpeed == -1.0) && 
+            (forceOrbit || randomOrbit || fBotStopOrbitTime > GetEngineTime())) || m_flNextSecondaryAttack > fGameTime) {
+			
+            if (fBotStopOrbitTime <= GetEngineTime() && !IsBotOrbiting)
+			{
+                if (forceOrbit) {
+                     fBotStopOrbitTime = GetEngineTime() + 999.0;
+                } else {
+				    fBotStopOrbitTime = GetEngineTime() + GetRandomFloat(MinOrbitTime, MaxOrbitTime);
+                    fLastOrbitTime = GetEngineTime();
+                }
+			}
+			if (m_flNextSecondaryAttack > fGameTime)
+			{
+				fBotStopOrbitTime = m_flNextSecondaryAttack - GetGameTime();
+			}
+			IsBotOrbiting = true;
+			float fOrbitVelocity[3];
+			NormalizeVector(fRocketAngles, fOrbitVelocity);
+			float velx = fOrbitVelocity[0];
+			float velz = fOrbitVelocity[1];
+			if (((angles[1] - fAngleToRocket[1]) < 0.0 || IsBotOrbitingRight) && !IsBotOrbitingLeft)
+			{
+				IsBotOrbitingRight = true;
+				fOrbitVelocity[0] = -velz;
+				fOrbitVelocity[1] = velx;
+			}
+			else if (((angles[1] - fAngleToRocket[1]) >= 0.0 || IsBotOrbitingLeft) && !IsBotOrbitingRight)
+			{
+				IsBotOrbitingLeft = true;
+				fOrbitVelocity[0] = velz;
+				fOrbitVelocity[1] = -velx;
+			}
+			fOrbitVelocity[2] = 0.0;
+			
+			ScaleVector(fOrbitVelocity, 300.0);
+
+            if (forceOrbit && fDistance > 200.0) {
+                float fToRocket[3];
+                MakeVectorFromPoints(fBotOrigin, fEntityOrigin, fToRocket);
+                NormalizeVector(fToRocket, fToRocket);
+                ScaleVector(fToRocket, 150.0);
+                AddVectors(fOrbitVelocity, fToRocket, fOrbitVelocity);
+            }
+
+			TeleportEntity(bot, NULL_VECTOR, NULL_VECTOR, fOrbitVelocity);
+		}
+		else {
+			IsBotOrbiting = false;
+			IsBotOrbitingRight = false;
+			IsBotOrbitingLeft = false;
+		}
+	}
 }
 
 void UpdateMovementAnalysis(int client, float currentPos[3])
@@ -2605,260 +3536,5 @@ void UpdateMovementAnalysis(int client, float currentPos[3])
     g_fLastUpdateTime[client] = currentTime;
 }
 
-public Action Timer_CheckStuckRockets(Handle timer)
-{
-    if (!botActivated || !IsValidClient(bot) || !IsPlayerAlive(bot))
-        return Plugin_Continue;
 
-    float botPos[3];
-    GetClientEyePosition(bot, botPos);
 
-    int entity = -1;
-    while ((entity = FindEntityByClassname(entity, "tf_projectile_rocket")) != -1)
-    {
-        if (!IsValidEntity(entity) || !g_bRocketStuckCheck[entity])
-            continue;
-
-        float rocketPos[3];
-        GetEntPropVector(entity, Prop_Data, "m_vecOrigin", rocketPos);
-
-        float distance = GetVectorDistance(botPos, rocketPos);
-
-        if (distance < 200.0)
-        {
-
-            float moveDistance = GetVectorDistance(g_fLastRocketPos[entity], rocketPos);
-
-            if (moveDistance < 10.0)
-            {
-                if (g_fRocketStuckTime[entity] == 0.0)
-                {
-                    g_fRocketStuckTime[entity] = GetGameTime();
-                }
-                else if (GetGameTime() - g_fRocketStuckTime[entity] > 0.2)
-                {
-
-                    ForceReflectStuckRocket(entity);
-                    g_bRocketStuckCheck[entity] = false; 
-                }
-            }
-            else
-            {
-                g_fRocketStuckTime[entity] = 0.0; 
-            }
-
-            g_fLastRocketPos[entity][0] = rocketPos[0];
-            g_fLastRocketPos[entity][1] = rocketPos[1];
-            g_fLastRocketPos[entity][2] = rocketPos[2];
-        }
-        else
-        {
-
-            g_fRocketStuckTime[entity] = 0.0;
-        }
-    }
-
-    return Plugin_Continue;
-}
-
-void ForceReflectStuckRocket(int rocket)
-{
-    if (!IsValidEntity(rocket) || !IsValidClient(bot) || !IsPlayerAlive(bot))
-        return;
-
-    char classname[64];
-    GetEntityClassname(rocket, classname, sizeof(classname));
-
-    if (!StrEqual(classname, "tf_projectile_rocket", false))
-        return;
-
-    float rocketPos[3], botPos[3], botAngles[3];
-    GetEntPropVector(rocket, Prop_Data, "m_vecOrigin", rocketPos);
-    GetClientEyePosition(bot, botPos);
-    GetClientEyeAngles(bot, botAngles);
-
-    float botDirection[3], toRocket[3];
-    GetAngleVectors(botAngles, botDirection, NULL_VECTOR, NULL_VECTOR);
-    SubtractVectors(rocketPos, botPos, toRocket);
-    NormalizeVector(toRocket, toRocket);
-    float dotProduct = GetVectorDotProduct(botDirection, toRocket);
-
-    if (dotProduct > 0.5)  
-    {
-
-        int target = TargetClient();
-
-        float direction[3];
-
-        if (IsValidClient(target))
-        {
-            float targetPos[3];
-            GetClientAbsOrigin(target, targetPos);
-            targetPos[2] += 40.0; 
-
-            SubtractVectors(targetPos, rocketPos, direction);
-        }
-        else
-        {
-
-            GetAngleVectors(botAngles, direction, NULL_VECTOR, NULL_VECTOR);
-        }
-
-        NormalizeVector(direction, direction);
-
-        float currentVelocity[3];
-        GetEntPropVector(rocket, Prop_Data, "m_vecAbsVelocity", currentVelocity);
-        float speed = GetVectorLength(currentVelocity);
-
-        if (speed < 100.0)
-            speed = 1100.0;
-
-        ScaleVector(direction, speed);
-
-        SetEntProp(rocket, Prop_Send, "m_iTeamNum", 3); 
-
-        int deflects = GetEntProp(rocket, Prop_Send, "m_iDeflected");
-        SetEntProp(rocket, Prop_Send, "m_iDeflected", deflects + 1);
-
-        TeleportEntity(rocket, NULL_VECTOR, NULL_VECTOR, direction);
-
-        float botHand[3];
-        botHand[0] = botPos[0] + botDirection[0] * 20.0;
-        botHand[1] = botPos[1] + botDirection[1] * 20.0;
-        botHand[2] = botPos[2] + botDirection[2] * 20.0;
-
-        TE_SetupGlowSprite(botHand, PrecacheModel("materials/sprites/blueglow2.vmt"), 0.2, 1.0, 255);
-        TE_SendToAll();
-    }
-}
-
-void ResetStuckRocketData()
-{
-    for (int i = 0; i < 2048; i++)
-    {
-        g_fRocketStuckTime[i] = 0.0;
-        g_bRocketStuckCheck[i] = false;
-        g_fLastRocketPos[i][0] = 0.0;
-        g_fLastRocketPos[i][1] = 0.0;
-        g_fLastRocketPos[i][2] = 0.0;
-    }
-}
-
-public Action Timer_CheckBotExists(Handle timer) {
-
-    if (botActivated) {
-        bool ourBotExists = false;
-
-        for (int i = 1; i <= MaxClients; i++) {
-            if (IsClientInGame(i) && IsOurBot(i)) {
-                ourBotExists = true;
-                bot = i; 
-                break;
-            }
-        }
-
-        if (!ourBotExists) {
-            float currentTime = GetGameTime();
-
-            if (currentTime - g_fLastBotCheckTime > g_fBotRespawnDelay) {
-                RecreateBot();
-                g_fLastBotCheckTime = currentTime;
-            }
-        }
-    }
-
-    return Plugin_Continue;
-}
-
-void RecreateBot() {
-    char botname[255];
-    GetConVarString(g_botName, botname, sizeof(botname));
-
-    ServerCommand("tf_bot_kick all");
-    ServerCommand("kick \"%s\"", botname);
-
-    ServerCommand("sm_manaosrobot_default 1");
-    ServerCommand("mp_autoteambalance 0");
-    ServerCommand("sv_cheats 1"); 
-
-    ServerCommand("bot -team blue -class pyro -name \"%s\"", botname);
-
-    CPrintToChatAll("%s %sBot has been %sauto-restarted", 
-        g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, g_strMainChatColor);
-
-    CreateTimer(0.5, Timer_ConfigurePuppetBot);
-    CreateTimer(1.0, Timer_UpdateBotReference);
-}
-
-public Action Timer_UpdateBotReference(Handle timer) {
-    int botIndex = FindBot();
-    if (botIndex != -1) {
-        bot = botIndex;
-
-        if (!IsBotBeatable) {
-            SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
-        }
-    }
-
-    return Plugin_Stop;
-}
-
-public Action Timer_SecondSound(Handle timer) {
-    EmitSoundToAll("mvm/mvm_tank_start.wav");
-    return Plugin_Stop;
-}
-
-public Action Timer_ApplySuperVelocity(Handle timer, int rocket) {
-    if(!IsValidEntity(rocket)) return Plugin_Stop;
-
-    char classname[64];
-    GetEntityClassname(rocket, classname, sizeof(classname));
-    if(!StrEqual(classname, "tf_projectile_rocket", false)) return Plugin_Stop;
-
-    int superTarget = TargetClient();
-    if(!IsValidClient(superTarget) || !IsPlayerAlive(superTarget)) return Plugin_Stop;
-
-    float rocketPos[3], targetEyes[3], direction[3];
-    GetEntPropVector(rocket, Prop_Data, "m_vecOrigin", rocketPos);
-    GetClientEyePosition(superTarget, targetEyes);
-    
-    MakeVectorFromPoints(rocketPos, targetEyes, direction);
-    NormalizeVector(direction, direction);
-
-    float currentVel[3];
-    GetEntPropVector(rocket, Prop_Data, "m_vecAbsVelocity", currentVel);
-    float speed = GetVectorLength(currentVel);
-    if(speed < 100.0) speed = 1100.0; 
-
-    ScaleVector(direction, speed);
-
-    float rocketAngles[3];
-    GetVectorAngles(direction, rocketAngles);
-
-    TeleportEntity(rocket, NULL_VECTOR, rocketAngles, direction);
-    
-    return Plugin_Stop;
-}
-
-public Action Timer_ConfigurePuppetBot(Handle timer) {
-
-    ServerCommand("bot_forceattack 0");      
-    ServerCommand("bot_forceattack2 0");     
-    ServerCommand("bot_dontmove 1");         
-    ServerCommand("bot_mimic 0");            
-
-    int botIndex = FindBot();
-    if (botIndex != -1) {
-        bot = botIndex;
-
-        if (!IsBotBeatable) {
-            SDKHook(bot, SDKHook_OnTakeDamage, OnTakeDamage);
-        }
-
-        float angles[3] = {0.0, 0.0, 0.0};
-        TeleportEntity(bot, NULL_VECTOR, angles, NULL_VECTOR);
-
-    }
-    
-    return Plugin_Stop;
-}
