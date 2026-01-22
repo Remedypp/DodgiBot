@@ -7,10 +7,15 @@ Type `!botmenu` in the chat to use it.
 
 ## Commands
 sm_botmenu : Opens the main menu
+
 sm_pvb : Vote to enable or disable the bot
+
 sm_votediff : Vote for difficulty
+
 sm_votedeflects : Vote for deflects to win
+
 sm_votesuper : Vote for super reflect chance
+
 sm_votemovement : Vote for bot movement
 
 ## Configuration
