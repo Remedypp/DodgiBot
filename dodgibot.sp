@@ -1,3 +1,4 @@
+﻿
 /** HEADER & GLOBALS */
 
 #pragma semicolon 1
@@ -219,6 +220,9 @@ public Plugin myinfo =
 	version = "v1.0",
 	url = ""
 };
+
+
+
 /** CORE PLUGIN LOGIC */
 
 public void OnPluginStart() {
@@ -345,6 +349,9 @@ public Action Timer_MapStart(Handle timer)
 	MapChanged = false;
 	return Plugin_Continue;
 }
+
+
+
 /** CONFIGURATION & CVARS */
 
 void LoadBotConfig()
@@ -503,6 +510,9 @@ void GetConVarArray(Handle convar, float[] destarr, int size)
         destarr[index] = StringToFloat(tmp[pos]);
     }
 }
+
+
+
 /** UTILITIES & HELPERS */
 
 stock void EnableMode() {
@@ -1368,6 +1378,9 @@ stock int GetRandomPlayer(int team) {
     delete players;
     return randomPlayer;
 }
+
+
+
 /** AI & LOGIC */
 
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2]) {
@@ -1791,6 +1804,9 @@ public Action OnTouchBot(int entity, int other)
 	SDKUnhook(entity, SDKHook_Touch, OnTouchBot);
 	return Plugin_Handled;
 }
+
+
+
 /** EVENTS */
 
 public Action Command_PVB(int client, int args) {
@@ -2105,6 +2121,9 @@ public Action Command_Say(int client, const char[] command, int argc)
 {
     return Plugin_Continue;
 }
+
+
+
 /** GAMEPLAY */
 
 public void OnGameFrame()
@@ -2395,6 +2414,9 @@ public Action Timer_AddHardModeDeflects(Handle timer, int hitNumber)
     
     return Plugin_Continue;
 }
+
+
+
 /** MENUS */
 
 public Action Command_VotePvB(int client, int args) {
@@ -2765,13 +2787,68 @@ public void DeflectsMenuHandler(Handle menu, MenuAction action, int client, int 
 }
 
 public Action Command_VoteDifficulty(int client, int args) {
+    if (client != 0 && !IsValidClient(client)) return Plugin_Handled;
+    
+    if (client != 0 && g_fGlobalVoteCooldownEndTime > GetGameTime()) {
+        float remaining = g_fGlobalVoteCooldownEndTime - GetGameTime();
+        float maxCooldown = GetConVarFloat(cvarVoteCooldown);
+        if (remaining > maxCooldown) {
+            remaining = maxCooldown;
+            g_fGlobalVoteCooldownEndTime = GetGameTime() + maxCooldown;
+        }
+        CReplyToCommand(client, "%s %sPlease wait %.1f seconds.", g_strServerChatTag, g_strMainChatColor, remaining);
+        return Plugin_Handled;
+    }
+
     if (IsVoteInProgress()) {
-        CReplyToCommand(client, "%s %sVote in progress.", 
-            g_strServerChatTag, g_strMainChatColor);
+        if (g_iVoteType != 2) {
+             CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
+             g_iPendingVoteType = 2;
+             return Plugin_Handled;
+        }
+    }
+    
+    if (g_iVoteType == 2) {
+        if (bVoted[client]) {
+            CReplyToCommand(client, "%s %sYou already voted.", g_strServerChatTag, g_strMainChatColor);
+            return Plugin_Handled;
+        }
+        
+        char name[MAX_NAME_LENGTH];
+        GetClientName(client, name, sizeof(name));
+        nVotes++;
+        bVoted[client] = true;
+        
+        CPrintToChatAll("%s %s%s supports difficulty vote. (%d/%d)", 
+            g_strServerChatTag, g_strMainChatColor, name, nVotes, nVotesNeeded);
+        
+        if (nVotes >= nVotesNeeded) {
+            ResetChatVote();
+            StartDifficultyVote();
+        }
         return Plugin_Handled;
     }
     
-    StartDifficultyVote();
+    if (IsChatVoteInProgress()) {
+        CReplyToCommand(client, "%s %sVote in progress.", g_strServerChatTag, g_strMainChatColor);
+        return Plugin_Handled;
+    }
+    
+    g_iVoteType = 2;
+    nVotes = 1;
+    bVoted[client] = true;
+    
+    char name[MAX_NAME_LENGTH];
+    GetClientName(client, name, sizeof(name));
+    
+    CPrintToChatAll("%s %s%s wants to vote difficulty. Type !votediff (%d/%d)", 
+        g_strServerChatTag, g_strMainChatColor, name, nVotes, nVotesNeeded);
+    
+    if (nVotes >= nVotesNeeded) {
+        ResetChatVote();
+        StartDifficultyVote();
+    }
+    
     return Plugin_Handled;
 }
 
@@ -3196,6 +3273,9 @@ public Action Command_BotBeatable(int client, int args) {
     CReplyToCommand(client, "%s %sBot Beatable: %s%s", g_strServerChatTag, g_strMainChatColor, g_strKeywordChatColor, IsBotBeatable ? "ON" : "OFF");
     return Plugin_Handled;
 }
+
+
+
 /**
  * Messages
  * Handles bot chat messages and commands.
@@ -3335,6 +3415,9 @@ void BotSayRandom() {
         BotChat(message);
     }
 }
+
+
+
 /** MOVEMENT */
 
 void InitOrbitPredictionSystem() {
@@ -4182,3 +4265,6 @@ void UpdateMovementAnalysis(int client, float currentPos[3])
     g_fLastPlayerPositions[client][2] = currentPos[2];
     g_fLastUpdateTime[client] = currentTime;
 }
+
+
+
