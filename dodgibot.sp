@@ -142,7 +142,6 @@ new bool:canTrackSpeed = false;
 bool g_bBotMovement = true;
 
 int nVotes = 0;
-int nVoters = 0;
 int nVotesNeeded = 0;
 int g_iVoteType = 0;
  
@@ -227,6 +226,7 @@ public Plugin myinfo =
 
 public void OnPluginStart() {
 	LoadBotConfig();
+	UpdateVotesNeeded();
 
 	g_aShuffledLaugh = CreateArray();
 	g_aShuffledDeflect = CreateArray();
@@ -307,6 +307,9 @@ public OnMapEnd()
 
 public OnMapStart()
 {
+	ResetBotConVars();
+	UpdateVotesNeeded();
+
 	CreateTimer(5.0, Timer_MapStart);
 	ShuffleSounds(g_aShuffledLaugh, g_iLaughIndex);
 	ShuffleSounds(g_aShuffledDeflect, g_iDeflectIndex);
@@ -336,12 +339,40 @@ public OnMapStart()
 	g_iEasterEggTarget = -1;
 	g_fBotSpawnTime = 0.0;
 
-	botActivated = false;
-	bot = 0;
-	for (int i = 1; i <= MaxClients; i++) bVoted[i] = false;
+	DisableMode();
+	ResetAllVotes();
+}
 
-    g_fGlobalVoteCooldownEndTime = 0.0;
-    g_iPendingVoteType = 0;
+public void OnClientPutInServer(int client)
+{
+    if (!IsFakeClient(client)) {
+        bVoted[client] = false;
+        bPvBVoted[client] = false;
+        UpdateVotesNeeded();
+        
+        int playerCount = GetAllClientCount();
+        if (playerCount == 1 && !botActivated) {
+            EnableMode();
+        }
+    }
+}
+
+public void OnClientDisconnect(int client)
+{
+    if (!IsFakeClient(client)) {
+        if (bVoted[client]) nVotes--;
+        if (bPvBVoted[client]) nPvBVotes--;
+        
+        bVoted[client] = false;
+        bPvBVoted[client] = false;
+        
+        UpdateVotesNeeded();
+        
+        int playerCount = GetAllClientCount();
+        if (playerCount == 0 && botActivated) {
+            DisableMode();
+        }
+    }
 }
 
 public Action Timer_MapStart(Handle timer)
@@ -444,6 +475,38 @@ void LoadBotConfig()
 	HookConVarChange(g_hPredictionQuality, OnConVarChange);
 
 	AutoExecConfig(true, "DodgiBot");
+}
+
+void ResetBotConVars()
+{
+	ResetConVar(g_botName);
+	ResetConVar(g_hCvarVoteTime);
+	ResetConVar(g_hMinReactionTime);
+	ResetConVar(g_hMaxReactionTime);
+	ResetConVar(g_hMinOrbitTime);
+	ResetConVar(g_hMaxOrbitTime);
+	ResetConVar(g_hOrbitChance);
+	ResetConVar(g_hOrbitEnabled);
+	ResetConVar(g_hFlickChances);
+	ResetConVar(g_hCQCFlickChances);
+	ResetConVar(g_hBeatableBot);
+	ResetConVar(g_hCvarServerChatTag);
+	ResetConVar(g_hCvarMainChatColor);
+	ResetConVar(g_hCvarKeywordChatColor);
+	ResetConVar(g_hCvarClientChatColor);
+	ResetConVar(g_hCvarBeatableBotMode);
+	ResetConVar(g_hCvarUnbeatableBotMode);
+	ResetConVar(cvarShieldRadius);
+	ResetConVar(cvarShieldForce);
+	ResetConVar(cvarVoteMode);
+	ResetConVar(g_hVictoryDeflects);
+	ResetConVar(g_hAimPlayer);
+	ResetConVar(g_hAimChance);
+	ResetConVar(g_hBotMovement);
+	ResetConVar(cvarVotePercent);
+	ResetConVar(cvarVoteCooldown);
+	ResetConVar(g_hBotDifficulty);
+	ResetConVar(g_hPredictionQuality);
 }
 
 public void OnConVarChange(Handle hConvar, const char[] oldValue, const char[] newValue)
@@ -1844,20 +1907,6 @@ public Action Command_BotModeToggle(int client, int args)
 	return Plugin_Handled;
 }
 
-public void OnClientPutInServer(int client) {
-
-
-	if (!IsFakeClient(client))
-	{
-		bVoted[client] = false;
-		
-		int playerCount = GetAllClientCount();
-		if (playerCount == 1 && !botActivated) {
-			EnableMode();
-		}
-	}
-	
-}
 
 public Action OnPlayerSpawn(Handle hEvent, char[] strEventName, bool bDontBroadcast) {
 	if (botActivated) {
@@ -2086,36 +2135,6 @@ public Action OnRoundEnd(Handle hEvent, char[] strEventName, bool bDontBroadcast
 	return Plugin_Continue;
 }
 
-public void OnClientConnected(int client)
-{
-    if (IsFakeClient(client)) return;
-    bVoted[client] = false;
-    bPvBVoted[client] = false;
-    nVoters++;
-    nVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
-    nPvBVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
-}
-
-public void OnClientDisconnect(int client) {
-  if (IsFakeClient(client)) return;
-  
-  if (bVoted[client]) nVotes--;
-  if (bPvBVoted[client]) nPvBVotes--;
-  
-  nVoters--;
-  nVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
-  nPvBVotesNeeded = RoundToFloor(float(nVoters) * GetConVarFloat(cvarVotePercent));
-  
-
-    bVoted[client] = false;
-    bPvBVoted[client] = false;
-    
-    int playerCount = GetAllClientCount();
-    
-    if (playerCount == 0 && botActivated) {
-        DisableMode();
-    }
-}
 
 public Action Command_Say(int client, const char[] command, int argc)
 {
@@ -2475,9 +2494,34 @@ public Action Command_VotePvB(int client, int args) {
     return Plugin_Handled;
 }
 
+void UpdateVotesNeeded()
+{
+    int count = GetRealClientCount(false);
+    float percent = GetConVarFloat(cvarVotePercent);
+    
+    nVotesNeeded = RoundToCeil(float(count) * percent);
+    if (nVotesNeeded < 1) nVotesNeeded = 1;
+    
+    nPvBVotesNeeded = nVotesNeeded;
+}
+
+bool IsAnyVoteInProgress()
+{
+    return (g_iVoteType != 0 || IsVoteInProgress());
+}
+
 void ResetPvBVotes() {
     nPvBVotes = 0;
     for (int i = 1; i <= MaxClients; i++) bPvBVoted[i] = false;
+}
+
+void ResetAllVotes()
+{
+    ResetChatVote();
+    ResetPvBVotes();
+    g_iPendingVoteType = 0;
+    g_fGlobalVoteCooldownEndTime = 0.0;
+    g_hCurrentVoteMenu = null;
 }
 
 public Action Timer_ResetVote(Handle timer)
@@ -2508,7 +2552,7 @@ public Action Timer_ResetVote(Handle timer)
 public Action Command_Revote(int client, int args) {
     if (!IsValidClient(client)) return Plugin_Handled;
     
-    if (!IsVoteInProgress()) {
+    if (!IsAnyVoteInProgress()) {
         CReplyToCommand(client, "%s %sNo vote in progress.", g_strServerChatTag, g_strMainChatColor);
         return Plugin_Handled;
     }
@@ -2800,7 +2844,7 @@ public Action Command_VoteDifficulty(int client, int args) {
         return Plugin_Handled;
     }
 
-    if (IsVoteInProgress()) {
+    if (IsAnyVoteInProgress()) {
         if (g_iVoteType != 2) {
              CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
              g_iPendingVoteType = 2;
@@ -2872,6 +2916,7 @@ public void DifficultyVoteHandler(Handle menu, MenuAction action, int param1, in
     {
         case MenuAction_End:
         {
+            g_hCurrentVoteMenu = null;
             CloseHandle(menu);
         }
         case MenuAction_VoteCancel:
@@ -2964,7 +3009,7 @@ public Action Command_VoteDeflects(int client, int args) {
         return Plugin_Handled;
     }
 
-    if (IsVoteInProgress()) {
+    if (IsAnyVoteInProgress()) {
         if (g_iVoteType != 3) {
              CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
              g_iPendingVoteType = 3;
@@ -3069,7 +3114,7 @@ public Action Command_VoteSuper(int client, int args) {
         return Plugin_Handled;
     }
 
-    if (IsVoteInProgress()) {
+    if (IsAnyVoteInProgress()) {
         if (g_iVoteType != 4) {
              CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
              g_iPendingVoteType = 4;
@@ -3174,7 +3219,7 @@ public Action Command_VoteMovement(int client, int args) {
         return Plugin_Handled;
     }
 
-    if (IsVoteInProgress()) {
+    if (IsAnyVoteInProgress()) {
         if (g_iVoteType != 5) {
              CReplyToCommand(client, "%s %sAnother vote is in progress. Queued.", g_strServerChatTag, g_strMainChatColor);
              g_iPendingVoteType = 5;
