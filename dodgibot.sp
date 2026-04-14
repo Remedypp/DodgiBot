@@ -1,4 +1,4 @@
-﻿
+
 /** HEADER & GLOBALS */
 
 #pragma semicolon 1
@@ -1306,6 +1306,10 @@ public Action Timer_CheckBotExists(Handle timer) {
             if (IsClientInGame(i) && IsOurBot(i)) {
                 ourBotExists = true;
                 bot = i; 
+
+                if (GetClientTeam(i) == 2) {
+                    ChangeClientTeam(i, 3);
+                }
                 break;
             }
         }
@@ -1916,7 +1920,9 @@ public Action OnPlayerSpawn(Handle hEvent, char[] strEventName, bool bDontBroadc
 				ChangeClientTeam(iClient, 2);
 			}
 		} else if (IsFakeClient(iClient) && IsOurBot(iClient)) {
-			
+			if (GetClientTeam(iClient) == 2) {
+				ChangeClientTeam(iClient, 3);
+			}
 			bot = iClient;
 			if (!IsBotBeatable)
 			{
